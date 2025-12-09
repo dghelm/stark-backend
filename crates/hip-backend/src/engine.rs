@@ -28,6 +28,7 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_field::Field;
 
 use crate::{
+    fri_log_up::FriLogUpPhaseGpu,
     hip_device::{HipConfig, HipDevice},
     prelude::{SC, WIDTH},
     prover_backend::HipBackend,
@@ -50,12 +51,10 @@ impl StarkFriEngine for HipBabyBearPoseidon2Engine {
         let perm = default_perm();
         let log_up_params = log_up_security_params_baby_bear_100_bits();
         Self {
-            device: HipDevice::new(HipConfig::new(fri_params, BabyBear::GENERATOR)),
-            // TODO: Add FriLogUpPhaseHip once implemented
-            // device: HipDevice::new_with_rap(
-            //     HipConfig::new(fri_params, BabyBear::GENERATOR),
-            //     Some(FriLogUpPhaseHip::new(log_up_params.clone())),
-            // ),
+            device: HipDevice::new(
+                HipConfig::new(fri_params, BabyBear::GENERATOR),
+                Some(FriLogUpPhaseGpu::new(log_up_params.clone())),
+            ),
             config: config_from_perm(
                 &perm,
                 SecurityParameters {

@@ -1,12 +1,6 @@
 //! HIP data transporter implementation.
 //!
 //! This module mirrors `cuda-backend/src/data_transporter.rs` for AMD GPUs.
-//!
-//! # Status
-//!
-//! - `transport_matrix_to_device` and `transport_matrix_from_device_to_host` are fully functional
-//! - `transport_pk_to_device` and `transport_committed_trace_to_device` require TraceCommitter
-//!   (LDE + Merkle tree) to be implemented first
 
 use std::{fmt::Debug, sync::Arc};
 
@@ -18,8 +12,11 @@ use openvm_stark_backend::{
     config::{Com, PcsProverData, Val},
     keygen::types::MultiStarkProvingKey,
     prover::{
-        hal::{DeviceDataTransporter, MatrixDimensions},
-        types::{CommittedTraceData, DeviceMultiStarkProvingKey},
+        hal::{DeviceDataTransporter, MatrixDimensions, TraceCommitter},
+        types::{
+            CommittedTraceData, DeviceMultiStarkProvingKey, DeviceStarkProvingKey,
+            SingleCommitPreimage,
+        },
     },
 };
 use p3_matrix::{dense::RowMajorMatrix, Matrix};
@@ -35,13 +32,35 @@ use crate::{
 impl DeviceDataTransporter<SC, HipBackend> for HipDevice {
     fn transport_pk_to_device(
         &self,
-        _mpk: &MultiStarkProvingKey<SC>,
+        mpk: &MultiStarkProvingKey<SC>,
     ) -> DeviceMultiStarkProvingKey<HipBackend> {
-        // TODO: Implement once TraceCommitter is available
-        // This requires self.commit() which needs LDE + Merkle tree
-        unimplemented!(
-            "HIP transport_pk_to_device requires TraceCommitter (LDE + Merkle tree). \
-             See hip-backend/src/lib.rs for porting status."
+        let per_air = mpk
+            .per_air
+            .iter()
+            .map(|pk| {
+                let preprocessed_data = pk.preprocessed_data.as_ref().map(|pd| {
+                    let trace = self.transport_matrix_to_device(&pd.trace);
+                    let (_, data) = self.commit(&[trace.clone()]);
+                    SingleCommitPreimage {
+                        trace,
+                        data,
+                        matrix_idx: 0,
+                    }
+                });
+
+                DeviceStarkProvingKey {
+                    air_name: pk.air_name.clone(),
+                    vk: pk.vk.clone(),
+                    preprocessed_data,
+                    rap_partial_pk: pk.rap_partial_pk.clone(),
+                }
+            })
+            .collect();
+
+        DeviceMultiStarkProvingKey::new(
+            per_air,
+            mpk.trace_height_constraints.clone(),
+            mpk.vk_pre_hash,
         )
     }
 
@@ -49,18 +68,25 @@ impl DeviceDataTransporter<SC, HipBackend> for HipDevice {
         transport_matrix_to_device(matrix.clone())
     }
 
+    /// We ignore the host prover data because it's faster to just re-commit on GPU instead of doing
+    /// H2D transfer.
     fn transport_committed_trace_to_device(
         &self,
-        _commitment: Com<SC>,
-        _trace: &Arc<RowMajorMatrix<Val<SC>>>,
-        _prover_data: &Arc<PcsProverData<SC>>,
+        commitment: Com<SC>,
+        trace: &Arc<RowMajorMatrix<Val<SC>>>,
+        _: &Arc<PcsProverData<SC>>,
     ) -> CommittedTraceData<HipBackend> {
-        // TODO: Implement once TraceCommitter is available
-        // This requires self.commit() which needs LDE + Merkle tree
-        unimplemented!(
-            "HIP transport_committed_trace_to_device requires TraceCommitter (LDE + Merkle tree). \
-             See hip-backend/src/lib.rs for porting status."
-        )
+        let trace = self.transport_matrix_to_device(trace);
+        let (d_commitment, data) = self.commit(&[trace.clone()]);
+        assert_eq!(
+            d_commitment, commitment,
+            "GPU commitment does not match host"
+        );
+        CommittedTraceData {
+            commitment,
+            trace,
+            data,
+        }
     }
 
     fn transport_matrix_from_device_to_host(

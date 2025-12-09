@@ -10,8 +10,7 @@ use p3_commit::TwoAdicMultiplicativeCoset;
 use p3_field::FieldAlgebra;
 use p3_util::log2_strict_usize;
 
-// TODO: Import FriLogUpPhaseHip once implemented
-// use crate::fri_log_up::FriLogUpPhaseHip;
+use crate::fri_log_up::FriLogUpPhaseGpu;
 
 /// Configuration for HIP device proving.
 #[derive(Derivative, derive_new::new, Clone, Copy, Debug)]
@@ -25,33 +24,24 @@ pub struct HipConfig {
 pub struct HipDevice {
     pub config: HipConfig,
     pub id: u32,
-    // TODO: Add FriLogUpPhaseHip once implemented
-    // rap_phase_seq: Option<FriLogUpPhaseHip>,
+    rap_phase_seq: Option<FriLogUpPhaseGpu>,
 }
 
 impl HipDevice {
     /// Create a new HIP device with the given configuration.
-    pub fn new(config: HipConfig) -> Self {
+    pub fn new(config: HipConfig, rap_phase_seq: Option<FriLogUpPhaseGpu>) -> Self {
         Self {
             config,
             id: get_device().unwrap() as u32,
+            rap_phase_seq,
         }
     }
 
-    // TODO: Uncomment once FriLogUpPhaseHip is implemented
-    // pub fn new_with_rap(config: HipConfig, rap_phase_seq: Option<FriLogUpPhaseHip>) -> Self {
-    //     Self {
-    //         config,
-    //         id: get_device().unwrap() as u32,
-    //         rap_phase_seq,
-    //     }
-    // }
-    //
-    // pub fn rap_phase_seq(&self) -> &FriLogUpPhaseHip {
-    //     self.rap_phase_seq
-    //         .as_ref()
-    //         .expect("FriLogUpPhaseHip is not initialized")
-    // }
+    pub fn rap_phase_seq(&self) -> &FriLogUpPhaseGpu {
+        self.rap_phase_seq
+            .as_ref()
+            .expect("FriLogUpPhaseGpu is not initialized")
+    }
 
     /// Get the natural domain for a given degree.
     pub fn natural_domain_for_degree(&self, degree: usize) -> TwoAdicMultiplicativeCoset<BabyBear> {

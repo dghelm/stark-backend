@@ -34,7 +34,7 @@ fn create_test_matrix(height: usize, width: usize) -> Arc<RowMajorMatrix<BabyBea
 fn create_hip_device() -> HipDevice {
     let fri = FriParameters::standard_fast();
     let config = HipConfig::new(fri, BabyBear::ONE);
-    HipDevice::new(config)
+    HipDevice::new(config, None)
 }
 
 #[test]

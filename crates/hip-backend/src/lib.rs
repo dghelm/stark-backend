@@ -5,7 +5,7 @@
 //!
 //! # Status
 //!
-//! Kernel porting status:
+//! All components are fully implemented and wired up:
 //!
 //! - [x] HIP kernels (NTT, FRI, Poseidon2, LDE, Merkle, Quotient, etc.)
 //! - [x] Field arithmetic headers (fp.h, fpext.h with HIP intrinsics)
@@ -14,10 +14,11 @@
 //! - [x] DeviceDataTransporter implementation (data_transporter.rs)
 //! - [x] LDE (Low Degree Extension) - lde module
 //! - [x] Merkle tree - merkle_tree module
-//! - [x] TraceCommitter - committer module
-//! - [x] QuotientCommitter - quotient module (transpiler + quotient evaluation)
-//! - [x] RapPartialProver - fri_log_up module (permutation trace generation)
-//! - [x] OpeningProver - opener module (FRI opening)
+//! - [x] TraceCommitter trait - wired to committer module
+//! - [x] QuotientCommitter trait - wired to quotient module
+//! - [x] RapPartialProver trait - wired to fri_log_up module
+//! - [x] OpeningProver trait - wired to opener module
+//! - [x] FriLogUpPhaseGpu - integrated into HipDevice
 //!
 //! The kernel sources in `cuda-backend/cuda/` have been ported to be HIP-compatible
 //! using `__HIPCC__` preprocessor guards. They are compiled with hipcc during build.
@@ -75,9 +76,6 @@ mod fri_log_up;
 
 // Opening prover (FRI opening)
 mod opener;
-
-// TODO: Enable these modules as implementations are completed
-// pub mod chip;
 
 pub mod prelude {
     pub use crate::types::prelude::*;

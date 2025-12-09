@@ -40,7 +40,7 @@ impl Default for HipBuilder {
             // Only --std=c++17 by default. Do NOT include CUDA-specific flags like
             // --expt-relaxed-constexpr, -Xfatbin, --default-stream=per-thread
             custom_flags: vec!["--std=c++17".to_string()],
-            link_libraries: vec!["amdhip64".to_string()],
+            link_libraries: vec!["amdhip64".to_string(), "stdc++".to_string()],
             link_search_paths,
         }
     }
