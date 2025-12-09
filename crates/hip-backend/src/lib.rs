@@ -15,9 +15,9 @@
 //! - [x] LDE (Low Degree Extension) - lde module
 //! - [x] Merkle tree - merkle_tree module
 //! - [x] TraceCommitter - committer module
-//! - [ ] QuotientCommitter (requires quotient polynomial evaluation)
-//! - [ ] RapPartialProver (requires permutation trace + FRI log-up)
-//! - [ ] OpeningProver (requires FRI opening)
+//! - [x] QuotientCommitter - quotient module (transpiler + quotient evaluation)
+//! - [x] RapPartialProver - fri_log_up module (permutation trace generation)
+//! - [x] OpeningProver - opener module (FRI opening)
 //!
 //! The kernel sources in `cuda-backend/cuda/` have been ported to be HIP-compatible
 //! using `__HIPCC__` preprocessor guards. They are compiled with hipcc during build.
@@ -30,6 +30,7 @@
 //! - LDE computation: 7 tests
 //! - Merkle tree: 5 tests
 //! - Trace committer: 4 tests
+//! - Transpiler codec: 8 tests
 
 // Ensure CUDA and ROCm backends are not enabled simultaneously.
 // This would cause link-time conflicts between cudart and amdhip64.
@@ -63,12 +64,20 @@ pub mod merkle_tree;
 // Trace commitment
 mod committer;
 
+// Constraint transpiler (compiles SymbolicConstraintsDag to GPU rules)
+mod transpiler;
+
+// Quotient polynomial evaluation
+mod quotient;
+
+// FRI log-up for permutation trace generation
+mod fri_log_up;
+
+// Opening prover (FRI opening)
+mod opener;
+
 // TODO: Enable these modules as implementations are completed
 // pub mod chip;
-// pub mod fri_log_up;
-// mod opener;
-// mod quotient;
-// mod transpiler;
 
 pub mod prelude {
     pub use crate::types::prelude::*;

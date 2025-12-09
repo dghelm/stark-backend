@@ -1,7 +1,6 @@
 //! HIP prover backend implementation.
 //!
 //! This module mirrors `cuda-backend/src/prover_backend.rs` for AMD GPUs.
-//! Currently contains stub implementations - full functionality requires ported kernels.
 
 use openvm_stark_backend::{
     config::{Com, PcsProof, RapPartialProvingKey, RapPhaseSeqPartialProof},
@@ -20,7 +19,13 @@ use openvm_stark_backend::{
 };
 use p3_baby_bear::Poseidon2BabyBear;
 
-use crate::{base::DeviceMatrix, hip_device::HipDevice, prelude::*};
+use crate::{
+    base::DeviceMatrix,
+    hip_device::HipDevice,
+    lde::GpuLdeImpl,
+    merkle_tree::GpuMerkleTree,
+    prelude::*,
+};
 
 /// HIP backend implementation for STARK proving system.
 ///
@@ -46,15 +51,18 @@ impl ProverBackend for HipBackend {
 }
 
 /// PCS data for HIP backend.
-///
-/// TODO: This is a placeholder. Full implementation requires:
-/// - HipMerkleTree (ported from GpuMerkleTree)
-/// - HipLdeImpl (ported from GpuLdeImpl)
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HipPcsData {
-    // TODO: Replace with actual merkle tree once LDE/kernels are ported
-    // pub data: HipMerkleTree<HipLdeImpl>,
+    pub data: GpuMerkleTree<GpuLdeImpl>,
     pub log_trace_heights: Vec<u8>,
+}
+
+impl std::fmt::Debug for HipPcsData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HipPcsData")
+            .field("log_trace_heights", &self.log_trace_heights)
+            .finish()
+    }
 }
 
 impl ProverDevice<HipBackend> for HipDevice {}
