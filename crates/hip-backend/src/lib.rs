@@ -11,7 +11,8 @@
 //! - [ ] Field arithmetic headers (fp.h, fpext.h with HIP intrinsics)
 //! - [ ] Kernel launchers
 //!
-//! Currently, only the Rust-side infrastructure is implemented.
+//! The Rust-side infrastructure (types, device, engine) is implemented as stubs
+//! that will work once kernels are ported.
 
 // Ensure CUDA and ROCm backends are not enabled simultaneously.
 // This would cause link-time conflicts between cudart and amdhip64.
@@ -25,6 +26,11 @@ compile_error!(
 pub mod base;
 pub mod types;
 
+// Device and backend types (stubs until kernels are ported)
+pub mod hip_device;
+pub mod prover_backend;
+pub mod engine;
+
 // TODO: Enable these modules once kernels are ported
 // pub mod chip;
 // mod committer;
@@ -35,13 +41,13 @@ pub mod types;
 // mod opener;
 // mod quotient;
 // mod transpiler;
+// pub mod data_transporter;
 
 pub mod prelude {
     pub use crate::types::prelude::*;
 }
 
-// TODO: Enable once kernel infrastructure is in place
-// pub mod data_transporter;
-// pub mod engine;
-// pub mod hip_device;
-// pub mod prover_backend;
+// Re-export main types for convenience
+pub use engine::HipBabyBearPoseidon2Engine;
+pub use hip_device::{HipConfig, HipDevice};
+pub use prover_backend::{HipBackend, HipPcsData};
