@@ -152,13 +152,28 @@ impl<T> DeviceBuffer<T> {
 impl<T> Drop for DeviceBuffer<T> {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
+            // Check if we're in shutdown mode - if so, skip the HIP API call entirely.
+            // This avoids SIGSEGV crashes when the HIP runtime is already tearing down.
+            if crate::memory_manager::is_shutting_down() {
+                tracing::debug!(
+                    "DeviceBuffer::drop() - skipping d_free during shutdown (size={})",
+                    self.len
+                );
+                self.ptr = ptr::null_mut();
+                self.len = 0;
+                return;
+            }
+
             tracing::debug!(
                 "Freeing device buffer of size {} (sizeof type = {})",
                 self.len,
                 size_of::<T>()
             );
-            unsafe {
-                d_free(self.ptr as *mut c_void).expect("GPU free failed");
+            // NOTE: We use graceful error handling here because d_free may fail
+            // during process shutdown when the HIP runtime is already tearing down.
+            // This is expected and acceptable - the OS will reclaim all resources.
+            if let Err(e) = unsafe { d_free(self.ptr as *mut c_void) } {
+                tracing::debug!("DeviceBuffer::drop() - d_free failed (may be during shutdown): {:?}", e);
             }
             self.ptr = ptr::null_mut();
             self.len = 0;

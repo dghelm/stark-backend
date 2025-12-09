@@ -1,11 +1,10 @@
-use std::{ffi::c_void, sync::Mutex};
+use std::{ffi::c_void, sync::Mutex, sync::OnceLock};
 
 use cubecl_hip_sys::{
     hipMemcpyAsync, hipMemcpyKind, hipMemcpyKind_hipMemcpyDeviceToDevice,
     hipMemcpyKind_hipMemcpyDeviceToHost, hipMemcpyKind_hipMemcpyHostToDevice,
     hipMemcpyKind_hipMemcpyHostToHost,
 };
-use lazy_static::lazy_static;
 
 use crate::{
     d_buffer::DeviceBuffer,
@@ -13,8 +12,15 @@ use crate::{
     stream::{hipStreamPerThread, HipEvent},
 };
 
-lazy_static! {
-    static ref COPY_EVENT: Mutex<HipEvent> = Mutex::new(HipEvent::new().unwrap());
+// NOTE: We use Box::leak + OnceLock instead of lazy_static to prevent Drop from
+// running during static destruction. This avoids SIGSEGV crashes caused by calling
+// HIP APIs after the ROCm runtime has already started shutting down.
+static COPY_EVENT: OnceLock<&'static Mutex<HipEvent>> = OnceLock::new();
+
+fn get_copy_event() -> &'static Mutex<HipEvent> {
+    COPY_EVENT.get_or_init(|| {
+        Box::leak(Box::new(Mutex::new(HipEvent::new().unwrap())))
+    })
 }
 
 /// FFI binding for the `hipMemcpyAsync` function on the default hip stream.
@@ -92,7 +98,7 @@ impl<T> MemCopyD2H<T> for DeviceBuffer<T> {
             )
         })?;
         unsafe {
-            COPY_EVENT
+            get_copy_event()
                 .lock()
                 .unwrap()
                 .record_and_wait(hipStreamPerThread)?;

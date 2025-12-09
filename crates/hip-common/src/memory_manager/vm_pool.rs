@@ -13,7 +13,7 @@ use super::hip::*;
 use crate::{
     common::set_device,
     error::MemoryError,
-    stream::{current_stream_id, current_stream_sync, HipEvent, HipStreamId},
+    stream::{current_stream_id, HipEvent, HipStreamId},
 };
 
 // ============================================================================
@@ -676,19 +676,16 @@ impl VirtualMemoryPool {
 
 impl Drop for VirtualMemoryPool {
     fn drop(&mut self) {
-        current_stream_sync().unwrap();
-        for (ptr, handle) in self.active_pages.drain() {
-            unsafe {
-                vpmm_unmap(ptr, self.page_size).unwrap();
-                vpmm_release(handle).unwrap();
-            }
-        }
-
-        for root in self.roots.drain(..) {
-            unsafe {
-                vpmm_release_va(root, self.va_size).unwrap();
-            }
-        }
+        // NOTE: We intentionally avoid calling HIP APIs from Drop.
+        // Static destructor order vs HIP runtime teardown is undefined and caused
+        // SIGSEGVs at process exit. The OS will reclaim GPU resources when the
+        // process exits, so we accept this small "leak" for robustness.
+        //
+        // In practice, this Drop should never run because the parent MemoryManager
+        // uses Box::leak to get a 'static lifetime.
+        tracing::debug!(
+            "VirtualMemoryPool::drop() called - skipping HIP cleanup (leak-on-exit pattern)"
+        );
     }
 }
 

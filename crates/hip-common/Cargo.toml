@@ -10,10 +10,10 @@ links = "hip-common"
 cubecl-hip-sys.workspace = true
 tracing.workspace = true
 metrics.workspace = true
-lazy_static.workspace = true
 thiserror.workspace = true
 bytesize.workspace = true
 ctor.workspace = true
+libc.workspace = true
 
 [build-dependencies]
 openvm-hip-builder.workspace = true

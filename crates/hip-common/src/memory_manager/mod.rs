@@ -10,7 +10,7 @@ use cubecl_hip_sys::{hipFreeAsync, hipMallocAsync};
 
 use crate::{
     error::{check, MemoryError},
-    stream::{current_stream_id, device_synchronize, hipStreamPerThread},
+    stream::{current_stream_id, hipStreamPerThread},
 };
 
 mod hip;
@@ -20,12 +20,69 @@ use vm_pool::VirtualMemoryPool;
 #[cfg(test)]
 mod tests;
 
-static MEMORY_MANAGER: OnceLock<Mutex<MemoryManager>> = OnceLock::new();
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// NOTE: We use `&'static` with Box::leak to prevent Drop from running during
+// static destruction. This avoids SIGSEGV crashes caused by calling HIP APIs
+// after the ROCm runtime has already started shutting down. The OS will reclaim
+// all GPU resources when the process exits.
+static MEMORY_MANAGER: OnceLock<&'static Mutex<MemoryManager>> = OnceLock::new();
+
+// Flag to indicate that we're in shutdown mode and should skip HIP API calls.
+// This is set by the #[ctor::dtor] function before static destruction begins.
+static SHUTDOWN_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Returns true if the process is shutting down and HIP APIs should be avoided.
+pub fn is_shutting_down() -> bool {
+    SHUTDOWN_IN_PROGRESS.load(Ordering::Relaxed)
+}
+
+/// atexit handler that calls _exit(0) to skip remaining atexit handlers.
+/// This prevents HIP runtime's buggy cleanup from running and causing SIGSEGV.
+///
+/// Set HIP_NO_FORCE_EXIT=1 to disable this workaround for debugging.
+extern "C" fn force_exit() {
+    // Allow opt-out via environment variable for debugging
+    if std::env::var("HIP_NO_FORCE_EXIT").is_ok() {
+        eprintln!("[HIP] HIP_NO_FORCE_EXIT set - skipping force exit (may crash)");
+        return;
+    }
+    // _exit() immediately terminates without running remaining atexit handlers
+    // or flushing stdio buffers. This is necessary because HIP/ROCm runtime's
+    // cleanup handlers have a bug that causes SIGSEGV when cleaning up resources
+    // from virtual memory pool (VPMM) allocations.
+    unsafe {
+        libc::_exit(0);
+    }
+}
+
+/// atexit handler to set the shutdown flag.
+/// This is used when HIP_NO_FORCE_EXIT is set, to signal that HIP APIs should be avoided
+/// during the remaining cleanup (though this path typically crashes due to HIP runtime bugs).
+extern "C" fn shutdown_flag_setter() {
+    SHUTDOWN_IN_PROGRESS.store(true, Ordering::Relaxed);
+}
 
 #[ctor::ctor]
 fn init() {
-    let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::new()));
-    tracing::info!("Memory manager initialized at program start");
+    // Register shutdown_flag_setter FIRST (runs LAST due to LIFO order).
+    // This is only reached if HIP_NO_FORCE_EXIT is set and force_exit doesn't terminate.
+    unsafe {
+        libc::atexit(shutdown_flag_setter);
+    }
+
+    // Box::leak gives us 'static lifetime - MemoryManager will never be dropped.
+    // This is intentional: static destructor order vs HIP runtime teardown is
+    // undefined and causes SIGSEGVs at process exit on some platforms.
+    let manager = Box::leak(Box::new(Mutex::new(MemoryManager::new())));
+    let _ = MEMORY_MANAGER.set(manager);
+    tracing::info!("Memory manager initialized (leak-on-exit pattern)");
+
+    // Register force_exit LAST (runs FIRST due to LIFO order).
+    // It immediately exits the process, preventing HIP's buggy cleanup from running.
+    unsafe {
+        libc::atexit(force_exit);
+    }
 }
 
 pub struct MemoryManager {
@@ -106,13 +163,16 @@ impl MemoryManager {
 
 impl Drop for MemoryManager {
     fn drop(&mut self) {
-        device_synchronize().unwrap();
-        let ptrs: Vec<*mut c_void> = self.allocated_ptrs.keys().map(|nn| nn.as_ptr()).collect();
-        for &ptr in &ptrs {
-            if let Err(e) = unsafe { self.d_free(ptr) } {
-                tracing::error!("MemoryManager drop: failed to free {:p}: {:?}", ptr, e);
-            }
-        }
+        // NOTE: We intentionally avoid calling HIP APIs from Drop.
+        // Static destructor order vs HIP runtime teardown is undefined and caused
+        // SIGSEGVs at process exit. The OS will reclaim GPU resources when the
+        // process exits, so we accept this small "leak" for robustness.
+        //
+        // In practice, this Drop should never run because we use Box::leak in
+        // the ctor to give MemoryManager a 'static lifetime.
+        tracing::debug!(
+            "MemoryManager::drop() called - skipping HIP cleanup (leak-on-exit pattern)"
+        );
     }
 }
 

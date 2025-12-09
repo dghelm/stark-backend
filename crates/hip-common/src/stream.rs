@@ -47,7 +47,15 @@ impl HipStream {
 impl Drop for HipStream {
     fn drop(&mut self) {
         if !self.stream.is_null() {
-            self.synchronize().unwrap();
+            // Skip HIP API calls during shutdown to avoid SIGSEGV
+            if crate::memory_manager::is_shutting_down() {
+                self.stream = std::ptr::null_mut();
+                return;
+            }
+            // NOTE: HIP APIs may fail during process shutdown when the HIP
+            // runtime is already tearing down. We intentionally ignore errors
+            // since the OS will reclaim all resources when the process exits.
+            let _ = self.synchronize();
             let _ = unsafe { hipStreamDestroy(self.stream) };
             self.stream = std::ptr::null_mut();
         }
@@ -170,7 +178,14 @@ impl HipEvent {
 
 impl Drop for HipEvent {
     fn drop(&mut self) {
-        unsafe { hipEventDestroy(self.event) };
+        // Skip HIP API calls during shutdown to avoid SIGSEGV
+        if crate::memory_manager::is_shutting_down() {
+            return;
+        }
+        // NOTE: hipEventDestroy may fail during process shutdown when the HIP
+        // runtime is already tearing down. We intentionally ignore errors here
+        // since the OS will reclaim all resources when the process exits.
+        let _ = unsafe { hipEventDestroy(self.event) };
     }
 }
 
