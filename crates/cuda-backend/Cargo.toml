@@ -45,3 +45,8 @@ tokio = { workspace = true, features = ["full"] }
 
 [features]
 touchemall = ["openvm-cuda-common/touchemall"]
+
+# Feature to detect if ROCm/HIP backend is also enabled (for conflict detection)
+# This feature should never be enabled directly - it's set by downstream crates
+# that accidentally enable both cuda-backend and hip-backend
+rocm = []

@@ -1,3 +1,12 @@
+// Ensure CUDA and ROCm backends are not enabled simultaneously.
+// This would cause link-time conflicts between cudart and amdhip64.
+#[cfg(feature = "rocm")]
+compile_error!(
+    "Features `cuda` and `rocm` are mutually exclusive. \
+     The CUDA backend (openvm-cuda-backend) cannot be used alongside HIP/ROCm. \
+     Please enable only one GPU backend."
+);
+
 pub mod base;
 pub mod chip;
 mod committer;

@@ -13,6 +13,15 @@
 //!
 //! Currently, only the Rust-side infrastructure is implemented.
 
+// Ensure CUDA and ROCm backends are not enabled simultaneously.
+// This would cause link-time conflicts between cudart and amdhip64.
+#[cfg(feature = "cuda")]
+compile_error!(
+    "Features `cuda` and `rocm` are mutually exclusive. \
+     The HIP backend (openvm-hip-backend) cannot be used alongside CUDA. \
+     Please enable only one GPU backend."
+);
+
 pub mod base;
 pub mod types;
 
