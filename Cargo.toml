@@ -8,7 +8,7 @@ repository = "https://github.com/openvm-org/"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["crates/stark-backend", "crates/stark-sdk", "crates/cuda-common", "crates/cuda-backend", "crates/cuda-builder", "crates/hip-builder", "crates/hip-common"]
+members = ["crates/stark-backend", "crates/stark-sdk", "crates/cuda-common", "crates/cuda-backend", "crates/cuda-builder", "crates/hip-builder", "crates/hip-common", "crates/hip-backend"]
 # Only these build by default
 default-members = ["crates/stark-backend", "crates/stark-sdk"]
 resolver = "2"
@@ -57,6 +57,7 @@ openvm-cuda-common = { path = "crates/cuda-common", default-features = false }
 openvm-cuda-backend = { path = "crates/cuda-backend", default-features = false }
 openvm-hip-builder = { path = "crates/hip-builder", default-features = false }
 openvm-hip-common = { path = "crates/hip-common", default-features = false }
+openvm-hip-backend = { path = "crates/hip-backend", default-features = false }
 
 # HIP bindings
 cubecl-hip-sys = "6.4"
