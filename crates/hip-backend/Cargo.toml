@@ -51,3 +51,15 @@ touchemall = ["openvm-hip-common/touchemall"]
 # This feature should never be enabled directly - it's set by downstream crates
 # that accidentally enable both cuda-backend and hip-backend
 cuda = []
+
+[[example]]
+name = "fibonacci"
+path = "examples/fibonacci.rs"
+
+[[example]]
+name = "trace_committer"
+path = "examples/trace_committer.rs"
+
+[[example]]
+name = "keccakf"
+path = "examples/keccakf.rs"

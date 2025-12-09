@@ -121,6 +121,9 @@ mod fri_log_up;
 // Opening prover (FRI opening)
 mod opener;
 
+// CPU-GPU hybrid chip support
+pub mod chip;
+
 pub mod prelude {
     pub use crate::types::prelude::*;
 }
