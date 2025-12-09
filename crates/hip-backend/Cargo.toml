@@ -43,6 +43,7 @@ rand = { workspace = true }
 p3-keccak-air = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 openvm-hip-builder.workspace = true
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [features]
 touchemall = ["openvm-hip-common/touchemall"]
@@ -63,3 +64,24 @@ path = "examples/trace_committer.rs"
 [[example]]
 name = "keccakf"
 path = "examples/keccakf.rs"
+
+# Performance benchmarks for investigating GPU bottlenecks
+[[bench]]
+name = "sync_overhead"
+harness = false
+
+[[bench]]
+name = "memory_copy"
+harness = false
+
+[[bench]]
+name = "ntt"
+harness = false
+
+[[bench]]
+name = "poseidon2"
+harness = false
+
+[[bench]]
+name = "lde"
+harness = false
