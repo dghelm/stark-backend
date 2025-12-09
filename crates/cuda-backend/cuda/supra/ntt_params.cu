@@ -72,6 +72,16 @@ extern "C" int _generate_all_twiddles(fr_t* twiddles, bool inverse) {
     generate_all_twiddles<<<TWIDDLES_SIZE/32, 32>>>(
             twiddles, roots[6], roots[7], roots[8], roots[9], roots[10]);
 
+#if defined(__HIPCC__)
+    if (inverse) {
+        hipMemcpyToSymbolAsync(HIP_SYMBOL(INVERSE_TWIDDLES), twiddles, TWIDDLES_SIZE * sizeof(fr_t),
+                               0, hipMemcpyDeviceToDevice, hipStreamPerThread);
+    } else {
+        hipMemcpyToSymbolAsync(HIP_SYMBOL(FORWARD_TWIDDLES), twiddles, TWIDDLES_SIZE * sizeof(fr_t),
+                               0, hipMemcpyDeviceToDevice, hipStreamPerThread);
+    }
+    hipStreamSynchronize(hipStreamPerThread);
+#else
     if (inverse) {
         cudaMemcpyToSymbolAsync(INVERSE_TWIDDLES, twiddles, TWIDDLES_SIZE * sizeof(fr_t),
                                 0, cudaMemcpyDeviceToDevice, cudaStreamPerThread);
@@ -80,6 +90,7 @@ extern "C" int _generate_all_twiddles(fr_t* twiddles, bool inverse) {
                                 0, cudaMemcpyDeviceToDevice, cudaStreamPerThread);
     }
     cudaStreamSynchronize(cudaStreamPerThread);
+#endif
     return CHECK_KERNEL();
 }
 
@@ -88,6 +99,16 @@ extern "C" int _generate_partial_twiddles(fr_t (*partial_twiddles)[WINDOW_SIZE],
     generate_partial_twiddles<<<WINDOW_SIZE/32, 32>>>(
             partial_twiddles, roots[MAX_LG_DOMAIN_SIZE]);
 
+#if defined(__HIPCC__)
+    if (inverse) {
+        hipMemcpyToSymbolAsync(HIP_SYMBOL(INVERSE_PARTIAL_TWIDDLES), partial_twiddles, WINDOW_NUM * WINDOW_SIZE * sizeof(fr_t),
+                               0, hipMemcpyDeviceToDevice, hipStreamPerThread);
+    } else {
+        hipMemcpyToSymbolAsync(HIP_SYMBOL(FORWARD_PARTIAL_TWIDDLES), partial_twiddles, WINDOW_NUM * WINDOW_SIZE * sizeof(fr_t),
+                               0, hipMemcpyDeviceToDevice, hipStreamPerThread);
+    }
+    hipStreamSynchronize(hipStreamPerThread);
+#else
     if (inverse) {
         cudaMemcpyToSymbolAsync(INVERSE_PARTIAL_TWIDDLES, partial_twiddles, WINDOW_NUM * WINDOW_SIZE * sizeof(fr_t),
                                 0, cudaMemcpyDeviceToDevice, cudaStreamPerThread);
@@ -96,5 +117,6 @@ extern "C" int _generate_partial_twiddles(fr_t (*partial_twiddles)[WINDOW_SIZE],
                                 0, cudaMemcpyDeviceToDevice, cudaStreamPerThread);
     }
     cudaStreamSynchronize(cudaStreamPerThread);
+#endif
     return CHECK_KERNEL();
 }

@@ -5,14 +5,31 @@
 //!
 //! # Status
 //!
-//! This crate is a work in progress. The following components need to be ported:
+//! Kernel porting status:
 //!
-//! - [ ] HIP kernels (NTT, FRI, Poseidon2, etc.)
-//! - [ ] Field arithmetic headers (fp.h, fpext.h with HIP intrinsics)
-//! - [ ] Kernel launchers
+//! - [x] HIP kernels (NTT, FRI, Poseidon2, LDE, Merkle, Quotient, etc.)
+//! - [x] Field arithmetic headers (fp.h, fpext.h with HIP intrinsics)
+//! - [x] Kernel launchers (launcher.cuh)
+//! - [x] Rust kernel bindings (hip/kernels.rs, hip/ntt.rs)
+//! - [x] DeviceDataTransporter implementation (data_transporter.rs)
+//! - [x] LDE (Low Degree Extension) - lde module
+//! - [x] Merkle tree - merkle_tree module
+//! - [x] TraceCommitter - committer module
+//! - [ ] QuotientCommitter (requires quotient polynomial evaluation)
+//! - [ ] RapPartialProver (requires permutation trace + FRI log-up)
+//! - [ ] OpeningProver (requires FRI opening)
 //!
-//! The Rust-side infrastructure (types, device, engine) is implemented as stubs
-//! that will work once kernels are ported.
+//! The kernel sources in `cuda-backend/cuda/` have been ported to be HIP-compatible
+//! using `__HIPCC__` preprocessor guards. They are compiled with hipcc during build.
+//!
+//! # Testing
+//!
+//! All core modules have been tested on AMD Radeon 8060S (gfx1151 / Strix Halo):
+//! - Matrix transpose: 7 tests
+//! - Data transport roundtrip: 8 tests
+//! - LDE computation: 7 tests
+//! - Merkle tree: 5 tests
+//! - Trace committer: 4 tests
 
 // Ensure CUDA and ROCm backends are not enabled simultaneously.
 // This would cause link-time conflicts between cudart and amdhip64.
@@ -26,22 +43,32 @@ compile_error!(
 pub mod base;
 pub mod types;
 
-// Device and backend types (stubs until kernels are ported)
+// Device and backend types
+pub mod engine;
 pub mod hip_device;
 pub mod prover_backend;
-pub mod engine;
 
-// TODO: Enable these modules once kernels are ported
+// HIP kernel bindings (now functional with ported kernels)
+pub mod hip;
+
+// Data transfer between host and device
+pub mod data_transporter;
+
+// LDE (Low Degree Extension) module
+pub mod lde;
+
+// Merkle tree for polynomial commitment
+pub mod merkle_tree;
+
+// Trace commitment
+mod committer;
+
+// TODO: Enable these modules as implementations are completed
 // pub mod chip;
-// mod committer;
-// pub mod hip;
 // pub mod fri_log_up;
-// mod lde;
-// mod merkle_tree;
 // mod opener;
 // mod quotient;
 // mod transpiler;
-// pub mod data_transporter;
 
 pub mod prelude {
     pub use crate::types::prelude::*;

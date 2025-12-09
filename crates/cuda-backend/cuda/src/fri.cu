@@ -10,7 +10,7 @@
 const uint32_t TILE_WIDTH = 32;
 static const size_t FRI_MAX_THREADS = 256;
 
-__forceinline__ __device__ uint32_t bit_rev(uint32_t x, uint32_t n) {
+DEVICE_INLINE uint32_t bit_rev(uint32_t x, uint32_t n) {
     return __brev(x) >> (__clz(n) + 1);
 }
 
@@ -353,11 +353,19 @@ __global__ void matrix_evaluate_finalize(
 
 int get_num_sms() {
     static int multiprocessorCount = []() {
+#if defined(__HIPCC__)
+        hipDeviceProp_t prop;
+        int device;
+        hipGetDevice(&device);
+        hipGetDeviceProperties(&prop, device);
+        return prop.multiProcessorCount;
+#else
         cudaDeviceProp prop;
         int device;
         cudaGetDevice(&device);
         cudaGetDeviceProperties(&prop, device);
         return prop.multiProcessorCount;
+#endif
     }();
     return multiprocessorCount;
 }

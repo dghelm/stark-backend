@@ -51,6 +51,12 @@ impl HipError {
         }
     }
 
+    /// Convenience method for converting i32 return values (as used by kernel launchers)
+    /// to HipError results.
+    pub fn from_result_i32(code: i32) -> Result<(), Self> {
+        Self::from_result(code as u32)
+    }
+
     /// Returns `true` if the error is hipErrorOutOfMemory
     #[inline]
     pub fn is_out_of_memory(&self) -> bool {

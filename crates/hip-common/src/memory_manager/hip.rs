@@ -39,7 +39,13 @@ extern "C" {
     ) -> u32;
 
     // Map physical memory to virtual address
-    fn hipMemMap(ptr: hipDeviceptr_t, size: usize, offset: usize, handle: hipMemGenericAllocationHandle_t, flags: u64) -> u32;
+    fn hipMemMap(
+        ptr: hipDeviceptr_t,
+        size: usize,
+        offset: usize,
+        handle: hipMemGenericAllocationHandle_t,
+        flags: u64,
+    ) -> u32;
 
     // Unmap memory from virtual address
     fn hipMemUnmap(ptr: hipDeviceptr_t, size: usize) -> u32;
@@ -48,17 +54,22 @@ extern "C" {
     fn hipMemRelease(handle: hipMemGenericAllocationHandle_t) -> u32;
 
     // Set memory access flags
-    fn hipMemSetAccess(ptr: hipDeviceptr_t, size: usize, desc: *const HipMemAccessDesc, count: usize) -> u32;
+    fn hipMemSetAccess(
+        ptr: hipDeviceptr_t,
+        size: usize,
+        desc: *const HipMemAccessDesc,
+        count: usize,
+    ) -> u32;
 }
 
 /// Memory allocation properties for HIP VMM
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HipMemAllocationProp {
-    pub allocation_type: u32,      // hipMemAllocationType
-    pub handle_type: u32,          // hipMemAllocationHandleType
-    pub location_type: u32,        // hipMemLocationType
-    pub location_id: i32,          // device ID
+    pub allocation_type: u32, // hipMemAllocationType
+    pub handle_type: u32,     // hipMemAllocationHandleType
+    pub location_type: u32,   // hipMemLocationType
+    pub location_id: i32,     // device ID
     pub win32_handle_meta_data: *const std::ffi::c_void,
     pub reserved: [u64; 8],
 }
@@ -66,9 +77,9 @@ pub(super) struct HipMemAllocationProp {
 impl Default for HipMemAllocationProp {
     fn default() -> Self {
         Self {
-            allocation_type: 1,    // hipMemAllocationTypePinned
-            handle_type: 0,        // hipMemHandleTypeNone
-            location_type: 1,      // hipMemLocationTypeDevice
+            allocation_type: 1, // hipMemAllocationTypePinned
+            handle_type: 0,     // hipMemHandleTypeNone
+            location_type: 1,   // hipMemLocationTypeDevice
             location_id: 0,
             win32_handle_meta_data: std::ptr::null(),
             reserved: [0; 8],
@@ -88,9 +99,9 @@ pub(super) struct HipMemAccessDesc {
 impl HipMemAccessDesc {
     pub fn new_read_write(device_id: i32) -> Self {
         Self {
-            location_type: 1,  // hipMemLocationTypeDevice
+            location_type: 1, // hipMemLocationTypeDevice
             location_id: device_id,
-            flags: 3,          // hipMemAccessFlagsProtReadWrite
+            flags: 3, // hipMemAccessFlagsProtReadWrite
         }
     }
 }

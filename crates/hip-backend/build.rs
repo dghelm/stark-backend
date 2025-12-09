@@ -8,29 +8,49 @@ fn main() {
         exit(1);
     }
 
-    let common = HipBuilder::new().include_from_dep("DEP_HIP_COMMON_INCLUDE");
+    // Paths for shared CUDA/HIP source code
+    // The headers in cuda-common have been ported to support both CUDA and HIP
+    // via __HIPCC__ preprocessor guards
+    let cuda_common_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../cuda-common");
+    let cuda_backend_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../cuda-backend");
+
+    // Base builder with cuda-common includes (fp.h, fpext.h, launcher.cuh, etc.)
+    let common = HipBuilder::new().include(cuda_common_path.join("include").to_str().unwrap());
 
     common.emit_link_directives();
 
-    // TODO: Build HIP kernels once they are ported from CUDA
-    // For now, we just emit link directives for the HIP runtime.
+    // Build the main kernels from cuda-backend (ported to be HIP-compatible)
+    // The .cu files use __HIPCC__ guards to provide HIP-compatible code paths
     //
-    // The kernel porting requires:
-    // 1. Port fp.h and fpext.h (field arithmetic with HIP-compatible intrinsics)
-    // 2. Port launcher.cuh (kernel launch helpers)
-    // 3. Port all .cu files to .hip equivalents
+    // Note: We previously used -fgpu-rdc (relocatable device code) for cross-TU
+    // symbol resolution, but this requires device-linking with hipcc at link time.
+    // Since Cargo uses the system linker (cc), we cannot do device linking.
+    // Each .cu file must be self-contained (no cross-TU __device__ calls).
+    common
+        .clone()
+        .library_name("stark_backend_hip")
+        .include(cuda_backend_path.join("cuda/include").to_str().unwrap())
+        .files_from_glob(cuda_backend_path.join("cuda/src/*.cu").to_str().unwrap())
+        .build();
+
+    // Build the NTT kernels from supra (ported to be HIP-compatible)
     //
-    // common
-    //     .clone()
-    //     .library_name("stark_backend_hip")
-    //     .include("hip/include")
-    //     .files_from_glob("hip/src/*.hip")
-    //     .build();
-    //
-    // common
-    //     .clone()
-    //     .library_name("supra_ntt_hip")
-    //     .include("hip/supra/include")
-    //     .files_from_glob("hip/supra/*.hip")
-    //     .build();
+    // The NTT code uses __constant__ device symbols defined in ntt_params.cu
+    // that are referenced in ntt.cu. Without -fgpu-rdc, these cross-TU references
+    // fail. We use a unified compilation unit (ntt_all.cu) that #includes all
+    // NTT sources to avoid the need for RDC.
+    let hip_backend_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    common
+        .clone()
+        .library_name("supra_ntt_hip")
+        .include(
+            cuda_backend_path
+                .join("cuda/supra/include")
+                .to_str()
+                .unwrap(),
+        )
+        .include(cuda_backend_path.join("cuda/supra").to_str().unwrap()) // For #include "ntt_*.cu"
+        .file(hip_backend_path.join("hip/ntt_all.cu").to_str().unwrap())
+        .build();
 }

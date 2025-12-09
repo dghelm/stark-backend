@@ -173,7 +173,7 @@ impl HipBuilder {
         let mut builder = cc::Build::new();
         let hipcc_path = find_hipcc().expect(
             "hipcc not found. Make sure ROCm is installed and either hipcc is in PATH, \
-             or set HIP_PATH/ROCM_PATH environment variable."
+             or set HIP_PATH/ROCM_PATH environment variable.",
         );
         builder.compiler(&hipcc_path);
 
@@ -188,11 +188,15 @@ impl HipBuilder {
             builder.include(include);
         }
 
-        // Add HIP_PATH/ROCM_PATH include if available
+        // Add HIP/ROCm include path (required for hip/amd_detail/* headers)
+        // Priority: HIP_PATH -> ROCM_PATH -> /opt/rocm (default)
         if let Ok(hip_path) = env::var("HIP_PATH") {
             builder.include(format!("{}/include", hip_path));
         } else if let Ok(rocm_path) = env::var("ROCM_PATH") {
             builder.include(format!("{}/include", rocm_path));
+        } else {
+            // Default ROCm installation path
+            builder.include("/opt/rocm/include");
         }
 
         // Add custom flags
@@ -205,8 +209,8 @@ impl HipBuilder {
             builder.flag(&format!("--offload-arch={}", arch));
         }
 
-        // Add parallel jobs flag
-        builder.flag(&hipcc_parallel_jobs());
+        // Note: Parallel compilation is handled by cc crate, not via -j flag
+        // (hipcc/clang don't support -j as a compiler flag)
 
         // Set optimization and debug flags
         if hip_opt_level == "0" {
@@ -331,10 +335,7 @@ pub fn hip_available() -> bool {
     }
 
     // Check standard ROCm locations
-    let standard_paths = [
-        "/opt/rocm/bin/hipcc",
-        "/usr/local/rocm/bin/hipcc",
-    ];
+    let standard_paths = ["/opt/rocm/bin/hipcc", "/usr/local/rocm/bin/hipcc"];
 
     for path in &standard_paths {
         if std::path::Path::new(path).exists() {
@@ -383,10 +384,7 @@ pub fn find_hipcc() -> Option<String> {
     }
 
     // Check standard ROCm locations
-    let standard_paths = [
-        "/opt/rocm/bin/hipcc",
-        "/usr/local/rocm/bin/hipcc",
-    ];
+    let standard_paths = ["/opt/rocm/bin/hipcc", "/usr/local/rocm/bin/hipcc"];
 
     for path in &standard_paths {
         if std::path::Path::new(path).exists() {
@@ -405,10 +403,7 @@ fn find_hipconfig() -> Option<String> {
     }
 
     // Check standard ROCm locations
-    let standard_paths = [
-        "/opt/rocm/bin/hipconfig",
-        "/usr/local/rocm/bin/hipconfig",
-    ];
+    let standard_paths = ["/opt/rocm/bin/hipconfig", "/usr/local/rocm/bin/hipconfig"];
 
     for path in &standard_paths {
         if std::path::Path::new(path).exists() {
@@ -444,9 +439,7 @@ pub fn detect_hip_arch() -> String {
             .output()
         {
             if output.status.success() {
-                let arch = String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .to_string();
+                let arch = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !arch.is_empty() && arch.starts_with("gfx") {
                     // Set both cargo env and process env
                     println!("cargo:rustc-env=HIP_ARCH={}", arch);

@@ -36,13 +36,13 @@ __host__ __device__ void print_decoded_rule(uint32_t rule_idx, Rule encoded, Dec
 
 #endif
 
-__forceinline__ __device__ uint32_t bit_rev(uint32_t x, uint32_t n) {
+DEVICE_INLINE uint32_t bit_rev(uint32_t x, uint32_t n) {
     return __brev(x) >> (__clz(n) + 1);
 }
 
 /// LDE could have bigger height than quotient size, in that case
 /// we need to bit_rev twice (first time for quotient size, second time for LDE height)
-__device__ __forceinline__ FpExt evaluate_source(
+DEVICE_INLINE FpExt evaluate_source(
     const SourceInfo &src,
     uint32_t q_row,           // quotient value row
     const Fp *d_preprocessed, // preprocessed LDE over Fp

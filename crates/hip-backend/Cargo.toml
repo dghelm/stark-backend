@@ -42,6 +42,7 @@ clap = { workspace = true }
 rand = { workspace = true }
 p3-keccak-air = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+openvm-hip-builder.workspace = true
 
 [features]
 touchemall = ["openvm-hip-common/touchemall"]

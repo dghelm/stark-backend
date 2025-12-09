@@ -17,6 +17,8 @@
 #include "launcher.cuh"
 #include "ntt/ntt.cuh"
 
+// Use the syncwarp macro from ntt.cuh for HIP compatibility
+
 template<int z_count, bool coalesced = false, class fr_t>
 __launch_bounds__(768, 1) __global__
 void _CT_NTT(const unsigned int radix, const unsigned int lg_domain_size,
@@ -24,7 +26,14 @@ void _CT_NTT(const unsigned int radix, const unsigned int lg_domain_size,
              fr_t* d_inout, const unsigned int padded_poly_size,
              bool is_intt, const fr_t d_domain_size_inverse)
 {
-#if (__CUDACC_VER_MAJOR__-0) >= 11
+// Compiler hints for optimization
+#if defined(__HIPCC__)
+    // HIP: __builtin_assume available in clang-based hipcc
+    __builtin_assume(lg_domain_size <= MAX_LG_DOMAIN_SIZE);
+    __builtin_assume(radix <= 10);
+    __builtin_assume(iterations <= radix);
+    __builtin_assume(stage <= lg_domain_size - iterations);
+#elif (__CUDACC_VER_MAJOR__-0) >= 11
     __builtin_assume(lg_domain_size <= MAX_LG_DOMAIN_SIZE);
     __builtin_assume(radix <= 10);
     __builtin_assume(iterations <= radix);
@@ -58,7 +67,7 @@ void _CT_NTT(const unsigned int radix, const unsigned int lg_domain_size,
         coalesced_load<z_count>(r[0], d_inout, idx0, stage + 1);
         coalesced_load<z_count>(r[1], d_inout, idx1, stage + 1);
         transpose<z_count>(r[0]);
-        __syncwarp();
+        NTT_SYNCWARP();
         transpose<z_count>(r[1]);
     } else {
         unsigned int z_shift = inp_mask==0 ? iterations : 0;
@@ -183,7 +192,7 @@ void _CT_NTT(const unsigned int radix, const unsigned int lg_domain_size,
 
     if (coalesced) {
         transpose<z_count>(r[0]);
-        __syncwarp();
+        NTT_SYNCWARP();
         transpose<z_count>(r[1]);
         coalesced_store<z_count>(d_inout, idx0, r[0], stage);
         coalesced_store<z_count>(d_inout, idx1, r[1], stage);

@@ -16,10 +16,16 @@
 #ifndef __SPPARK_FF_BABY_BEAR_HPP__
 #define __SPPARK_FF_BABY_BEAR_HPP__
 
-#ifdef __CUDACC__   // CUDA device-side field types
+#if defined(__CUDACC__) || defined(__HIPCC__)   // GPU device-side field types
 # include <cassert>
 # include "mont32_t.cuh"
-# define inline __device__ __forceinline__
+
+// HIP/CUDA compatibility for inline qualifier
+# if defined(__HIPCC__)
+#  define inline __device__ __attribute__((always_inline)) inline
+# else
+#  define inline __device__ __forceinline__
+# endif
 
 using bb31_base = mont32_t<31, 0x78000001, 0x77ffffff, 0x45dddde3, 0x0ffffffe>;
 
@@ -90,10 +96,17 @@ public:
     inline bb31_4_t()           {}
     inline bb31_4_t(bb31_t a)   { c[0] = a; u[1] = u[2] = u[3] = 0; }
     // this is used in constant declaration, e.g. as bb31_4_t{1, 2, 3, 4}
+#if defined(__HIPCC__) && defined(__HIP_PLATFORM_AMD__)
+    __host__ __device__ __attribute__((always_inline)) inline bb31_4_t(int a)
+    {   c[0] = bb31_t{a}; u[1] = u[2] = u[3] = 0;   }
+    __host__ __device__ __attribute__((always_inline)) inline bb31_4_t(int d, int f, int g, int h)
+    {   c[0] = bb31_t{d}; c[1] = bb31_t{f}; c[2] = bb31_t{g}; c[3] = bb31_t{h};   }
+#else
     __host__ __device__ __forceinline__ bb31_4_t(int a)
     {   c[0] = bb31_t{a}; u[1] = u[2] = u[3] = 0;   }
     __host__ __device__ __forceinline__ bb31_4_t(int d, int f, int g, int h)
     {   c[0] = bb31_t{d}; c[1] = bb31_t{f}; c[2] = bb31_t{g}; c[3] = bb31_t{h};   }
+#endif
 
     // Polynomial multiplication/squaring modulo x^4 - BETA
     inline bb31_4_t& sqr()
@@ -626,9 +639,9 @@ public:
 # endif
 
     inline bool is_one() const
-    {   return c[0].is_one() & u[1]==0 & u[2]==0 & u[3]==0;   }
+    {   return c[0].is_one() & (u[1]==0) & (u[2]==0) & (u[3]==0);   }
     inline bool is_zero() const
-    {   return u[0]==0 & u[1]==0 & u[2]==0 & u[3]==0;   }
+    {   return (u[0]==0) & (u[1]==0) & (u[2]==0) & (u[3]==0);   }
 
     // raise to a variable power, variable in respect to threadIdx,
     // but mind the ^ operator's precedence!

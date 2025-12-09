@@ -81,7 +81,7 @@ void bit_rev_permutation_z(fr_t* out, const fr_t* in, uint32_t lg_domain_size, u
                 regs[i] = in[i * step + base_rev];
         }
 
-        (Z_COUNT > WARP_SIZE) ? __syncthreads() : __syncwarp();
+        NTT_SYNC_CONDITIONAL(Z_COUNT);
 
         #pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
@@ -90,13 +90,13 @@ void bit_rev_permutation_z(fr_t* out, const fr_t* in, uint32_t lg_domain_size, u
         if (group_idx == group_rev)
             continue;
 
-        (Z_COUNT > WARP_SIZE) ? __syncthreads() : __syncwarp();
+        NTT_SYNC_CONDITIONAL(Z_COUNT);
 
         #pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
             xchg[gid][i][rev] = regs[i];
 
-        (Z_COUNT > WARP_SIZE) ? __syncthreads() : __syncwarp();
+        NTT_SYNC_CONDITIONAL(Z_COUNT);
 
         #pragma unroll
         for (uint32_t i = 0; i < Z_COUNT; i++)
@@ -132,9 +132,14 @@ extern "C" int _bit_rev(fr_t* d_out, const fr_t* d_inp,
         // Those GPUs that can reserve 96KB of shared memory can
         // schedule 2 blocks to each SM...
         int device;
-        cudaGetDevice(&device);
         int sm_count;
+#if defined(__HIPCC__)
+        hipGetDevice(&device);
+        hipDeviceGetAttribute(&sm_count, hipDeviceAttributeMultiprocessorCount, device);
+#else
+        cudaGetDevice(&device);
         cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device);
+#endif
 
         bit_rev_permutation_z<Z_COUNT><<<dim3(sm_count * 2, poly_count), 192,
                                             192 * Z_COUNT * sizeof(fr_t)>>>

@@ -3,32 +3,24 @@
 //! This module mirrors `cuda-backend/src/prover_backend.rs` for AMD GPUs.
 //! Currently contains stub implementations - full functionality requires ported kernels.
 
-use std::sync::Arc;
-
 use openvm_stark_backend::{
-    config::{Com, PcsProof, PcsProverData, RapPartialProvingKey, RapPhaseSeqPartialProof, Val},
-    keygen::types::MultiStarkProvingKey,
+    config::{Com, PcsProof, RapPartialProvingKey, RapPhaseSeqPartialProof},
     p3_challenger::DuplexChallenger,
-    p3_matrix::dense::RowMajorMatrix,
     proof::OpeningProof,
     prover::{
         hal::{
-            DeviceDataTransporter, OpeningProver, ProverBackend, ProverDevice,
-            QuotientCommitter, RapPartialProver, TraceCommitter,
+            OpeningProver, ProverBackend, ProverDevice, QuotientCommitter, RapPartialProver,
+            TraceCommitter,
         },
         types::{
-            AirView, CommittedTraceData, DeviceMultiStarkProvingKey,
-            DeviceMultiStarkProvingKeyView, DeviceStarkProvingKey, ProverDataAfterRapPhases,
+            AirView, DeviceMultiStarkProvingKeyView, DeviceStarkProvingKey,
+            ProverDataAfterRapPhases,
         },
     },
 };
 use p3_baby_bear::Poseidon2BabyBear;
 
-use crate::{
-    base::DeviceMatrix,
-    hip_device::HipDevice,
-    prelude::*,
-};
+use crate::{base::DeviceMatrix, hip_device::HipDevice, prelude::*};
 
 /// HIP backend implementation for STARK proving system.
 ///
@@ -127,43 +119,4 @@ impl OpeningProver<HipBackend> for HipDevice {
     }
 }
 
-impl DeviceDataTransporter<SC, HipBackend> for HipDevice {
-    fn transport_pk_to_device(
-        &self,
-        _mpk: &MultiStarkProvingKey<SC>,
-    ) -> DeviceMultiStarkProvingKey<HipBackend> {
-        unimplemented!(
-            "HIP DeviceDataTransporter requires device memory infrastructure. \
-             See docs/rocm-stark-backend-plan.md for remaining work."
-        )
-    }
-
-    fn transport_matrix_to_device(&self, _matrix: &Arc<RowMajorMatrix<Val<SC>>>) -> DeviceMatrix<F> {
-        unimplemented!(
-            "HIP DeviceDataTransporter requires device memory infrastructure. \
-             See docs/rocm-stark-backend-plan.md for remaining work."
-        )
-    }
-
-    fn transport_committed_trace_to_device(
-        &self,
-        _commitment: Com<SC>,
-        _trace: &Arc<RowMajorMatrix<Val<SC>>>,
-        _prover_data: &Arc<PcsProverData<SC>>,
-    ) -> CommittedTraceData<HipBackend> {
-        unimplemented!(
-            "HIP DeviceDataTransporter requires device memory infrastructure. \
-             See docs/rocm-stark-backend-plan.md for remaining work."
-        )
-    }
-
-    fn transport_matrix_from_device_to_host(
-        &self,
-        _matrix: &DeviceMatrix<F>,
-    ) -> Arc<RowMajorMatrix<Val<SC>>> {
-        unimplemented!(
-            "HIP DeviceDataTransporter requires device memory infrastructure. \
-             See docs/rocm-stark-backend-plan.md for remaining work."
-        )
-    }
-}
+// DeviceDataTransporter implemented in data_transporter.rs

@@ -270,7 +270,11 @@ impl VirtualMemoryPool {
 
     /// Phase 1: Try to find a suitable free region without defragmentation
     /// Returns address if found, None otherwise
-    fn find_best_fit(&mut self, requested: usize, stream_id: HipStreamId) -> Option<hipDeviceptr_t> {
+    fn find_best_fit(
+        &mut self,
+        requested: usize,
+        stream_id: HipStreamId,
+    ) -> Option<hipDeviceptr_t> {
         let mut candidates: Vec<(hipDeviceptr_t, &mut FreeRegion)> = self
             .free_regions
             .iter_mut()

@@ -9,6 +9,13 @@
 
 #include <cstdint>
 
+// HIP/CUDA compatibility for inline qualifier
+#if defined(__HIPCC__)
+#define CODEC_HD_INLINE __host__ __device__ __attribute__((always_inline)) inline
+#else
+#define CODEC_HD_INLINE __host__ __device__ __forceinline__
+#endif
+
 // Constraint is encoded in 128-bit little-endian, but uin128_t is not supported in CUDA.
 // Therefore we use two `uint64_t`s to represent it.
 typedef struct {
@@ -57,9 +64,9 @@ typedef struct {
 } DecodedRule;
 
 // decode source from 48-bit little-endian integer
-__host__ __device__ __forceinline__ SourceInfo decode_source(uint64_t encoded);
+CODEC_HD_INLINE SourceInfo decode_source(uint64_t encoded);
 // decode rule from 128-bit little-endian integer
-__host__ __device__ __forceinline__ DecodedRule decode_rule(Rule encoded);
+CODEC_HD_INLINE DecodedRule decode_rule(Rule encoded);
 
 // 0. There are 11 variants of source that can be encoded in 4 bits:
 //
@@ -129,7 +136,7 @@ static_assert(BUFFER_RESULT_MASK == one << 62, "BUFFER_RESULT_MASK must be (1 <<
 static_assert(IS_CONSTRAINT_MASK == one << 63, "IS_CONSTRAINT_MASK must be (1 << 63)");
 
 // big-endian: 4-bit src | 12-bit col | 31-bit row | 1-bit reserved
-__host__ __device__ __forceinline__ SourceInfo decode_source(uint64_t encoded) {
+CODEC_HD_INLINE SourceInfo decode_source(uint64_t encoded) {
     // common
     SourceInfo src;
     src.type = (EntryType)(encoded & ENTRY_SRC_MASK);                 // 4-bit
@@ -149,7 +156,7 @@ __host__ __device__ __forceinline__ SourceInfo decode_source(uint64_t encoded) {
     return src;
 }
 
-__host__ __device__ __forceinline__ DecodedRule decode_rule(Rule encoded) {
+CODEC_HD_INLINE DecodedRule decode_rule(Rule encoded) {
     DecodedRule rule;
 
     // Extract x (48 bits from the right)

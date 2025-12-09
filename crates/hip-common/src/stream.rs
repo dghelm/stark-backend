@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use cubecl_hip_sys::{
     hipDeviceSynchronize, hipEventCreate, hipEventDestroy, hipEventElapsedTime, hipEventQuery,
-    hipEventRecord, hipEventSynchronize, hipStreamCreate, hipStreamDestroy, hipStreamSynchronize,
-    hipStreamWaitEvent, hipEvent_t, hipStream_t,
+    hipEventRecord, hipEventSynchronize, hipEvent_t, hipStreamCreate, hipStreamDestroy,
+    hipStreamSynchronize, hipStreamWaitEvent, hipStream_t,
 };
 
 use crate::error::{check, HipError};
@@ -157,8 +157,8 @@ impl HipEvent {
     pub fn status(&self) -> HipEventStatus {
         let status = unsafe { hipEventQuery(self.event) };
         match status {
-            0 => HipEventStatus::Completed,   // hipSuccess
-            600 => HipEventStatus::NotReady,  // hipErrorNotReady
+            0 => HipEventStatus::Completed,  // hipSuccess
+            600 => HipEventStatus::NotReady, // hipErrorNotReady
             _ => HipEventStatus::Error(HipError::new(status)),
         }
     }

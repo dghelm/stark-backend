@@ -15,20 +15,40 @@
 #ifndef __NTT_CUH__
 #define __NTT_CUH__
 
+#if defined(__HIPCC__)
+#include <hip/hip_cooperative_groups.h>
+#else
 #include <cooperative_groups.h>
+#endif
 #include "parameters.cuh"
 
+// HIP/CUDA compatibility for inline qualifier
+#if defined(__HIPCC__)
+# define NTT_DEVICE_INLINE __device__ __attribute__((always_inline)) inline
+// HIP: __syncwarp is not available, use __syncthreads or cooperative_groups
+// For warp-level sync in HIP, we use empty function on RDNA (warp=32) since
+// instructions within a wavefront execute in lockstep
+# define NTT_SYNCWARP() do { } while(0)
+// Conditional sync: use block sync when Z_COUNT > warp size, otherwise warp sync
+# define NTT_SYNC_CONDITIONAL(z_count) ((z_count) > WARP_SIZE) ? __syncthreads() : (void)0
+#else
+# define NTT_DEVICE_INLINE __device__ __forceinline__
+# define NTT_SYNCWARP() __syncwarp()
+# define NTT_SYNC_CONDITIONAL(z_count) ((z_count) > WARP_SIZE) ? __syncthreads() : __syncwarp()
+#endif
+
 template<typename T>
-__device__ __forceinline__
+NTT_DEVICE_INLINE
 T bit_rev(T i, unsigned int nbits)
 {
+    // HIP and CUDA both provide __brev / __brevll for bit reversal
     if (sizeof(i) == 4 || nbits <= 32)
-        return __brev(i) >> (8*sizeof(unsigned int) - nbits);
+        return __brev(static_cast<unsigned int>(i)) >> (8*sizeof(unsigned int) - nbits);
     else
-        return __brevll(i) >> (8*sizeof(unsigned long long) - nbits);
+        return __brevll(static_cast<unsigned long long>(i)) >> (8*sizeof(unsigned long long) - nbits);
 }
 
-__device__ __forceinline__
+NTT_DEVICE_INLINE
 fr_t get_intermediate_root(index_t pow, const fr_t (*roots)[WINDOW_SIZE])
 {
     unsigned int off = 0;
@@ -65,7 +85,7 @@ fr_t get_intermediate_root(index_t pow, const fr_t (*roots)[WINDOW_SIZE])
     return root;
 }
 
-__device__ __forceinline__
+NTT_DEVICE_INLINE
 void get_intermediate_roots(fr_t& root0, fr_t& root1,
                             index_t idx0, index_t idx1,
                             const fr_t (*roots)[WINDOW_SIZE])
@@ -88,7 +108,7 @@ void get_intermediate_roots(fr_t& root0, fr_t& root1,
 }
 
 template<int z_count>
-__device__ __forceinline__
+NTT_DEVICE_INLINE
 void coalesced_load(fr_t r[z_count], const fr_t* inout, index_t idx,
                     const unsigned int stage)
 {
@@ -102,7 +122,7 @@ void coalesced_load(fr_t r[z_count], const fr_t* inout, index_t idx,
 }
 
 template<int z_count>
-__device__ __forceinline__
+NTT_DEVICE_INLINE
 void transpose(fr_t r[z_count])
 {
     extern __shared__ fr_t shared_exchange[];
@@ -115,7 +135,7 @@ void transpose(fr_t r[z_count])
     for (int z = 0; z < z_count; z++)
         xchg[y + z][x] = r[z];
 
-    __syncwarp();
+    NTT_SYNCWARP();
 
     #pragma unroll
     for (int z = 0; z < z_count; z++)
@@ -123,7 +143,7 @@ void transpose(fr_t r[z_count])
 }
 
 template<int z_count>
-__device__ __forceinline__
+NTT_DEVICE_INLINE
 void coalesced_store(fr_t* inout, index_t idx, const fr_t r[z_count],
                      const unsigned int stage)
 {

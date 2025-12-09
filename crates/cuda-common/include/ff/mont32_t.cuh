@@ -11,18 +11,81 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-#if defined(__CUDACC__) && !defined(__SPPARK_FF_MONT32_T_CUH__)
+#if (defined(__CUDACC__) || defined(__HIPCC__)) && !defined(__SPPARK_FF_MONT32_T_CUH__)
 #define __SPPARK_FF_MONT32_T_CUH__
 
 # include <cstdint>
-# define inline __device__ __forceinline__
-# ifdef __clang_analyzer__
-#  define asm(...) ({ __builtin_trap(); })
-# elif __GNUC__
-#  define asm __asm__ __volatile__
-# else
-#  define asm asm volatile
+
+// HIP compatibility: include device functions header BEFORE redefining inline
+# if defined(__HIPCC__)
+#  include <hip/amd_detail/amd_device_functions.h>
 # endif
+
+// HIP/CUDA compatibility: inline qualifier for device functions
+# if defined(__HIPCC__)
+#  define inline __device__ __attribute__((always_inline)) inline
+// HIP doesn't support PTX inline assembly - use C++ fallbacks
+#  define MONT32_USE_CPP_FALLBACK 1
+# else
+#  define inline __device__ __forceinline__
+# endif
+
+// asm macro for CUDA (HIP uses C++ fallbacks instead)
+# ifndef MONT32_USE_CPP_FALLBACK
+#  ifdef __clang_analyzer__
+#   define asm(...) ({ __builtin_trap(); })
+#  elif __GNUC__
+#   define asm __asm__ __volatile__
+#  else
+#   define asm asm volatile
+#  endif
+# endif
+
+// C++ fallback helpers for HIP (portable implementations)
+# ifdef MONT32_USE_CPP_FALLBACK
+namespace mont32_hip_compat {
+    // 32x32 -> 64 bit multiplication, returns {lo, hi}
+    __device__ __attribute__((always_inline)) inline
+    void mul_wide(uint32_t a, uint32_t b, uint32_t& lo, uint32_t& hi) {
+        uint64_t prod = (uint64_t)a * b;
+        lo = (uint32_t)prod;
+        hi = (uint32_t)(prod >> 32);
+    }
+
+    // Multiply-add: {lo, hi} = a * b + c, returns carry
+    __device__ __attribute__((always_inline)) inline
+    uint32_t mad_wide(uint32_t a, uint32_t b, uint32_t c, uint32_t& lo, uint32_t& hi) {
+        uint64_t prod = (uint64_t)a * b + c;
+        lo = (uint32_t)prod;
+        hi = (uint32_t)(prod >> 32);
+        return 0; // No overflow possible with single add
+    }
+
+    // Multiply-add with accumulate: {lo, hi} += a * b
+    __device__ __attribute__((always_inline)) inline
+    void mad_wide_acc(uint32_t a, uint32_t b, uint32_t& lo, uint32_t& hi) {
+        uint64_t acc = ((uint64_t)hi << 32) | lo;
+        acc += (uint64_t)a * b;
+        lo = (uint32_t)acc;
+        hi = (uint32_t)(acc >> 32);
+    }
+
+    // Funnel shift right: (hi:lo) >> shift
+    __device__ __attribute__((always_inline)) inline
+    uint32_t shf_r_wrap(uint32_t lo, uint32_t hi, uint32_t shift) {
+        uint64_t combined = ((uint64_t)hi << 32) | lo;
+        return (uint32_t)(combined >> (shift & 31));
+    }
+
+    // Add with carry out
+    __device__ __attribute__((always_inline)) inline
+    uint32_t add_cc(uint32_t a, uint32_t b, uint32_t& carry) {
+        uint64_t sum = (uint64_t)a + b + carry;
+        carry = (uint32_t)(sum >> 32);
+        return (uint32_t)sum;
+    }
+}
+# endif // MONT32_USE_CPP_FALLBACK
 
 template<const size_t N, const uint32_t MOD, const uint32_t M0,
          const uint32_t RR, const uint32_t ONE>
@@ -95,17 +158,28 @@ public:
         if (r > 2) {
             uint32_t lo, hi, red = (val * M0) & ((1<<r) - 1);
 
+#ifdef MONT32_USE_CPP_FALLBACK
+            mont32_hip_compat::mad_wide(red, MOD, val, lo, hi);
+            val = mont32_hip_compat::shf_r_wrap(lo, hi, r);
+#else
             asm("mad.lo.cc.u32 %0, %2, %3, %4; madc.hi.u32 %1, %2, %3, 0;"
                 : "=r"(lo), "=r"(hi) : "r"(red), "r"(MOD), "r"(val));
             asm("shf.r.wrap.b32 %0, %1, %2, %3;"
                 : "=r"(val) : "r"(lo), "r"(hi), "r"(r));
+#endif
 	} else if (N == 32) {
             while (r--) {
                 uint32_t tmp = val&1 ? MOD : 0;
 
+#ifdef MONT32_USE_CPP_FALLBACK
+                uint32_t carry = 0;
+                val = mont32_hip_compat::add_cc(val, tmp, carry);
+                val = mont32_hip_compat::shf_r_wrap(val, carry, 1);
+#else
                 asm("add.cc.u32 %0, %0, %1;"        : "+r"(val) : "r"(tmp));
                 asm("addc.u32   %0, 0, 0;"          : "=r"(tmp));
                 asm("shf.r.wrap.b32 %0, %0, %1, 1;" : "+r"(val) : "r"(tmp));
+#endif
             }
         } else {
             while (r--) {
@@ -121,12 +195,20 @@ public:
 
     inline mont32_t& operator-=(const mont32_t b)
     {
+#ifdef MONT32_USE_CPP_FALLBACK
+        if (val < b.val) {
+            val = val - b.val + MOD;
+        } else {
+            val = val - b.val;
+        }
+#else
         asm("{");
         asm(".reg.pred %brw;");
         asm("setp.lt.u32 %brw, %0, %1;" :: "r"(val), "r"(b.val));
         asm("sub.u32 %0, %0, %1;"       : "+r"(val) : "r"(b.val));
         asm("@%brw add.u32 %0, %0, %1;" : "+r"(val) : "r"(MOD));
         asm("}");
+#endif
 
         return *this;
     }
@@ -135,12 +217,18 @@ public:
 
     inline mont32_t cneg(bool flag)
     {
+#ifdef MONT32_USE_CPP_FALLBACK
+        if (val != 0 && flag) {
+            val = MOD - val;
+        }
+#else
         asm("{");
         asm(".reg.pred %flag;");
         asm("setp.ne.u32 %flag, %0, 0;" :: "r"(val));
         asm("@%flag setp.ne.u32 %flag, %0, 0;" :: "r"((int)flag));
         asm("@%flag sub.u32 %0, %1, %0;" : "+r"(val) : "r"(MOD));
         asm("}");
+#endif
 
         return *this;
     }
@@ -158,11 +246,15 @@ public:
     {
         mont32_t ret;
 
+#ifdef MONT32_USE_CPP_FALLBACK
+        ret.val = set_z ? 0 : a.val;
+#else
         asm("{");
         asm(".reg.pred %set_z;");
         asm("setp.ne.s32 %set_z, %0, 0;" : : "r"(set_z));
         asm("selp.u32 %0, 0, %1, %set_z;" : "=r"(ret.val) : "r"(a.val));
         asm("}");
+#endif
 
         return ret;
     }
@@ -171,11 +263,15 @@ public:
     {
         mont32_t ret;
 
+#ifdef MONT32_USE_CPP_FALLBACK
+        ret.val = sel_a ? a.val : b.val;
+#else
         asm("{");
         asm(".reg.pred %sel_a;");
         asm("setp.ne.s32 %sel_a, %0, 0;" :: "r"(sel_a));
         asm("selp.u32 %0, %1, %2, %sel_a;" : "=r"(ret.val) : "r"(a.val), "r"(b.val));
         asm("}");
+#endif
 
         return ret;
     }
@@ -183,6 +279,13 @@ public:
 private:
     static inline uint32_t final_sub(uint32_t val)
     {
+#ifdef MONT32_USE_CPP_FALLBACK
+        // Simple modular reduction - no carry tracking needed for C++ version
+        if (val >= MOD) {
+            val -= MOD;
+        }
+        return val;
+#else
         asm("{");
         asm(".reg.pred %p;");
         if (N == 32) {
@@ -199,12 +302,19 @@ private:
         asm("}");
 
         return val;
+#endif
     }
 
     inline mont32_t& mul(const mont32_t b)
     {
         uint32_t tmp[2], red;
 
+#ifdef MONT32_USE_CPP_FALLBACK
+        // Montgomery multiplication using C++
+        mont32_hip_compat::mul_wide(val, b.val, tmp[0], tmp[1]);
+        red = tmp[0] * M0;
+        mont32_hip_compat::mad_wide_acc(red, MOD, tmp[0], tmp[1]);
+#else
         asm("mul.lo.u32 %0, %2, %3; mul.hi.u32 %1, %2, %3;"
             : "=r"(tmp[0]), "=r"(tmp[1])
             : "r"(val), "r"(b.val));
@@ -212,6 +322,7 @@ private:
         asm("mad.lo.cc.u32 %0, %2, %3, %0; madc.hi.cc.u32 %1, %2, %3, %1;"
             : "+r"(tmp[0]), "+r"(tmp[1])
             : "r"(red), "r"(MOD));
+#endif
 
         val = final_sub(tmp[1]);
 
@@ -222,10 +333,15 @@ private:
     {
         uint32_t tmp[2], red;
 
+#ifdef MONT32_USE_CPP_FALLBACK
+        red = val * M0;
+        mont32_hip_compat::mad_wide(red, MOD, val, tmp[0], tmp[1]);
+#else
         asm("mul.lo.u32 %0, %1, %2;" : "=r"(red) : "r"(val), "r"(M0));
         asm("mad.lo.cc.u32 %0, %2, %3, %4; madc.hi.u32 %1, %2, %3, 0;"
             : "=r"(tmp[0]), "=r"(tmp[1])
             : "r"(red), "r"(MOD), "r"(val));
+#endif
 
         return tmp[1];
     }
@@ -261,7 +377,11 @@ public:
     inline mont32_t& operator^=(int p)
     {
         if (p < 2)
+#ifdef MONT32_USE_CPP_FALLBACK
+            __builtin_trap();
+#else
             asm("trap;");
+#endif
 
         if (p == 7) {
             mont32_t temp = sqr_n_mul(*this, 1, *this);
@@ -302,6 +422,18 @@ public:
     {
         uint32_t acc[2];
 
+#ifdef MONT32_USE_CPP_FALLBACK
+        mont32_hip_compat::mul_wide(*a[0], *b[0], acc[0], acc[1]);
+
+        for (size_t i = 1; i < T; i++) {
+            mont32_hip_compat::mad_wide_acc(*a[i], *b[i], acc[0], acc[1]);
+            if (N == 32 || (N != 32 && i == T-1))
+                acc[1] = final_sub(acc[1]);
+        }
+
+        uint32_t red = acc[0] * M0;
+        mont32_hip_compat::mad_wide_acc(red, MOD, acc[0], acc[1]);
+#else
         asm("mul.lo.u32 %0, %2, %3; mul.hi.u32 %1, %2, %3;"
             : "=r"(acc[0]), "=r"(acc[1]) : "r"(*a[0]), "r"(*b[0]));
 
@@ -332,6 +464,7 @@ public:
         asm("mul.lo.u32 %0, %1, %2;" : "=r"(red) : "r"(acc[0]), "r"(M0));
         asm("mad.lo.cc.u32 %0, %2, %3, %0; madc.hi.cc.u32 %1, %2, %3, %1;"
             : "+r"(acc[0]), "+r"(acc[1]) : "r"(red), "r"(MOD));
+#endif
 
         return final_sub(acc[1]);
     }
@@ -343,6 +476,18 @@ public:
     {
         uint32_t acc[2];
 
+#ifdef MONT32_USE_CPP_FALLBACK
+        mont32_hip_compat::mul_wide(*a0, *b0, acc[0], acc[1]);
+
+        for (size_t i = 0; i < T-1; i++, b += stride_b) {
+            mont32_hip_compat::mad_wide_acc(*a[i], *b[0], acc[0], acc[1]);
+            if (N == 32 || (N != 32 && i == T-2))
+                acc[1] = final_sub(acc[1]);
+        }
+
+        uint32_t red = acc[0] * M0;
+        mont32_hip_compat::mad_wide_acc(red, MOD, acc[0], acc[1]);
+#else
         asm("mul.lo.u32 %0, %2, %3; mul.hi.u32 %1, %2, %3;"
             : "=r"(acc[0]), "=r"(acc[1]) : "r"(*a0), "r"(*b0));
 
@@ -375,6 +520,7 @@ public:
         asm("mul.lo.u32 %0, %1, %2;" : "=r"(red) : "r"(acc[0]), "r"(M0));
         asm("mad.lo.cc.u32 %0, %2, %3, %0; madc.hi.cc.u32 %1, %2, %3, %1;"
             : "+r"(acc[0]), "+r"(acc[1]) : "r"(red), "r"(MOD));
+#endif
 
         return final_sub(acc[1]);
     }
@@ -382,18 +528,37 @@ public:
     inline mont32_t reciprocal() const
     {   return *this ^ (MOD-2);   }
     friend inline mont32_t operator/(int one, mont32_t a)
-    {   if (one != 1) asm("trap;"); return a.reciprocal();   }
+    {
+#ifdef MONT32_USE_CPP_FALLBACK
+        if (one != 1) __builtin_trap();
+#else
+        if (one != 1) asm("trap;");
+#endif
+        return a.reciprocal();
+    }
     friend inline mont32_t operator/(mont32_t a, mont32_t b)
     {   return a * b.reciprocal();   }
     inline mont32_t& operator/=(const mont32_t a)
     {   return *this *= a.reciprocal();   }
 
     inline void shfl_bfly(uint32_t laneMask)
-    {   val = __shfl_xor_sync(0xFFFFFFFF, val, laneMask);   }
+    {
+#ifdef MONT32_USE_CPP_FALLBACK
+        val = __shfl_xor(val, laneMask);
+#else
+        val = __shfl_xor_sync(0xFFFFFFFF, val, laneMask);
+#endif
+    }
 
 protected:
     static inline mont32_t sqr_n(mont32_t s, uint32_t n)
     {
+#ifdef MONT32_USE_CPP_FALLBACK
+        // For HIP, use the generic sqr() approach
+        #pragma unroll 4
+        while (n--)
+            s.sqr();
+#else
         if (N == 32 || M0 > MOD) {
             #pragma unroll 4
             while (n--)
@@ -415,6 +580,7 @@ protected:
                     s.val = final_sub(s.val);
             }
         }
+#endif
 
         return s;
     }
@@ -428,7 +594,9 @@ protected:
     }
 
 # undef inline
-# undef asm
+# ifndef MONT32_USE_CPP_FALLBACK
+#  undef asm
+# endif
 
 public:
     friend inline bool operator==(mont32_t a, mont32_t b)
