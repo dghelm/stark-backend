@@ -40,25 +40,33 @@ pub fn is_shutting_down() -> bool {
 /// atexit handler that calls _exit(0) to skip remaining atexit handlers.
 /// This prevents HIP runtime's buggy cleanup from running and causing SIGSEGV.
 ///
-/// Set HIP_NO_FORCE_EXIT=1 to disable this workaround for debugging.
+/// Behavior controlled by environment variables:
+/// - HIP_FORCE_EXIT=1: Enable force exit (recommended for test suites)
+/// - Default (no env var): Normal exit (may crash with SIGSEGV on some systems)
+///
+/// The force exit is OFF by default because calling _exit() skips Rust destructors
+/// and can mask test failures. Enable it when running many HIP tests that would
+/// otherwise crash during cleanup due to HIP/ROCm runtime bugs.
 extern "C" fn force_exit() {
-    // Allow opt-out via environment variable for debugging
-    if std::env::var("HIP_NO_FORCE_EXIT").is_ok() {
-        eprintln!("[HIP] HIP_NO_FORCE_EXIT set - skipping force exit (may crash)");
-        return;
+    // Only force exit if explicitly requested via environment variable
+    let force_exit_enabled = std::env::var("HIP_FORCE_EXIT")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
+    if force_exit_enabled {
+        // _exit() immediately terminates without running remaining atexit handlers
+        // or flushing stdio buffers. This is necessary because HIP/ROCm runtime's
+        // cleanup handlers have a bug that causes SIGSEGV when cleaning up resources
+        // from virtual memory pool (VPMM) allocations.
+        unsafe {
+            libc::_exit(0);
+        }
     }
-    // _exit() immediately terminates without running remaining atexit handlers
-    // or flushing stdio buffers. This is necessary because HIP/ROCm runtime's
-    // cleanup handlers have a bug that causes SIGSEGV when cleaning up resources
-    // from virtual memory pool (VPMM) allocations.
-    unsafe {
-        libc::_exit(0);
-    }
+    // Otherwise, let normal exit proceed (may crash with SIGSEGV on some systems)
 }
 
 /// atexit handler to set the shutdown flag.
-/// This is used when HIP_NO_FORCE_EXIT is set, to signal that HIP APIs should be avoided
-/// during the remaining cleanup (though this path typically crashes due to HIP runtime bugs).
+/// This signals that HIP APIs should be avoided during remaining cleanup.
 extern "C" fn shutdown_flag_setter() {
     SHUTDOWN_IN_PROGRESS.store(true, Ordering::Relaxed);
 }

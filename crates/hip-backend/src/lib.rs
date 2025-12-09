@@ -32,6 +32,20 @@
 //! - Merkle tree: 5 tests
 //! - Trace committer: 4 tests
 //! - Transpiler codec: 8 tests
+//!
+//! ## Running Tests
+//!
+//! Due to a bug in the HIP/ROCm runtime's cleanup handlers, running many tests
+//! without the `HIP_FORCE_EXIT=1` environment variable may cause a SIGSEGV after
+//! tests complete (during process teardown). To run tests cleanly:
+//!
+//! ```bash
+//! HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo test --package openvm-hip-backend
+//! ```
+//!
+//! The `HIP_FORCE_EXIT=1` flag tells the HIP backend to call `_exit(0)` before
+//! the buggy HIP runtime cleanup handlers can run. This is safe for tests but
+//! should not be used in production (where you want normal process teardown).
 
 // Ensure CUDA and ROCm backends are not enabled simultaneously.
 // This would cause link-time conflicts between cudart and amdhip64.
