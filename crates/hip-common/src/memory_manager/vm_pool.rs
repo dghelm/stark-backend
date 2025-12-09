@@ -120,6 +120,9 @@ pub(super) struct VirtualMemoryPool {
 
     // Device ordinal
     pub(super) device_id: i32,
+
+    // Flag to track if shutdown() has been called (for idempotency)
+    shutdown_done: bool,
 }
 
 /// # Safety
@@ -189,6 +192,7 @@ impl VirtualMemoryPool {
             page_size,
             va_size,
             device_id,
+            shutdown_done: false,
         };
 
         // Preallocate pages if requested (skip if VPMM not supported)
@@ -671,6 +675,59 @@ impl VirtualMemoryPool {
     /// Returns the total physical memory currently mapped in this pool (in bytes).
     pub(super) fn memory_usage(&self) -> usize {
         self.active_pages.len() * self.page_size
+    }
+
+    /// Explicitly release all VPMM resources.
+    ///
+    /// This method properly cleans up GPU resources before process exit,
+    /// avoiding the SIGSEGV crash that occurs when HIP's internal cleanup
+    /// runs after we've allocated VPMM objects.
+    ///
+    /// # Idempotency
+    /// Safe to call multiple times - subsequent calls are no-ops.
+    pub(super) fn shutdown(&mut self) {
+        if self.shutdown_done {
+            return;
+        }
+        self.shutdown_done = true;
+
+        // Skip cleanup if VPMM wasn't supported (fallback to hipMalloc)
+        if self.page_size == usize::MAX {
+            tracing::debug!("VirtualMemoryPool::shutdown() - VPMM not supported, nothing to clean");
+            return;
+        }
+
+        tracing::debug!(
+            "VirtualMemoryPool::shutdown() - releasing {} pages, {} roots",
+            self.active_pages.len(),
+            self.roots.len()
+        );
+
+        // 1) Unmap all mapped regions and release physical handles
+        for (&va, &handle) in self.active_pages.iter() {
+            if let Err(e) = unsafe { vpmm_unmap(va, self.page_size) } {
+                tracing::warn!("vpmm_unmap failed during shutdown: va={:#x}: {:?}", va, e);
+            }
+            if let Err(e) = unsafe { vpmm_release(handle) } {
+                tracing::warn!("vpmm_release failed during shutdown: handle={}: {:?}", handle, e);
+            }
+        }
+
+        // 2) Release all VA ranges
+        for &root in &self.roots {
+            if let Err(e) = unsafe { vpmm_release_va(root, self.va_size) } {
+                tracing::warn!("vpmm_release_va failed during shutdown: root={:#x}: {:?}", root, e);
+            }
+        }
+
+        // Clear all tracking structures
+        self.active_pages.clear();
+        self.roots.clear();
+        self.free_regions.clear();
+        self.malloc_regions.clear();
+        self.unmapped_regions.clear();
+
+        tracing::debug!("VirtualMemoryPool::shutdown() completed");
     }
 }
 

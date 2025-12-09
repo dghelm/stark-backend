@@ -93,11 +93,42 @@ fn init() {
     }
 }
 
+/// Best-effort early shutdown via destructor.
+///
+/// This runs during process teardown and attempts to clean up VPMM resources
+/// before HIP's internal atexit handlers run. The order of dtor execution
+/// relative to HIP's cleanup is not guaranteed, but this provides a clean
+/// shutdown path when it runs early enough.
+///
+/// Combined with the opt-in `HIP_FORCE_EXIT=1` fallback, this gives us:
+/// - Normal exit: dtor tries to clean up properly
+/// - Force exit: `_exit(0)` skips everything (guaranteed no crash)
+#[ctor::dtor]
+fn early_shutdown() {
+    // Don't attempt shutdown if force_exit will handle it
+    let force_exit_enabled = std::env::var("HIP_FORCE_EXIT")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
+    if force_exit_enabled {
+        // force_exit() will call _exit(0) and skip all cleanup anyway
+        return;
+    }
+
+    // Attempt early cleanup
+    if let Some(mm) = MEMORY_MANAGER.get() {
+        if let Ok(mut guard) = mm.lock() {
+            guard.shutdown();
+        }
+    }
+}
+
 pub struct MemoryManager {
     pool: VirtualMemoryPool,
     allocated_ptrs: HashMap<NonNull<c_void>, usize>,
     current_size: usize,
     max_used_size: usize,
+    shutdown_done: bool,
 }
 
 /// # Safety
@@ -116,7 +147,46 @@ impl MemoryManager {
             allocated_ptrs: HashMap::new(),
             current_size: 0,
             max_used_size: 0,
+            shutdown_done: false,
         }
+    }
+
+    /// Explicitly release all GPU resources.
+    ///
+    /// This method properly cleans up GPU resources before process exit,
+    /// avoiding the SIGSEGV crash that occurs when HIP's internal cleanup
+    /// runs after we've allocated VPMM objects.
+    ///
+    /// # Idempotency
+    /// Safe to call multiple times - subsequent calls are no-ops.
+    pub fn shutdown(&mut self) {
+        if self.shutdown_done {
+            return;
+        }
+        self.shutdown_done = true;
+
+        tracing::debug!(
+            "MemoryManager::shutdown() - releasing {} small allocations",
+            self.allocated_ptrs.len()
+        );
+
+        // Free small allocations (allocated via hipMallocAsync)
+        for (ptr, _size) in self.allocated_ptrs.drain() {
+            // Best effort - don't fail on errors during shutdown
+            let result = unsafe { hipFreeAsync(ptr.as_ptr(), hipStreamPerThread) };
+            if result != 0 {
+                tracing::warn!(
+                    "hipFreeAsync failed during shutdown: ptr={:p}, error={}",
+                    ptr.as_ptr(),
+                    result
+                );
+            }
+        }
+
+        // Shutdown the VM pool
+        self.pool.shutdown();
+
+        tracing::debug!("MemoryManager::shutdown() completed");
     }
 
     fn d_malloc(&mut self, size: usize) -> Result<*mut c_void, MemoryError> {
@@ -203,6 +273,44 @@ pub unsafe fn d_free(ptr: *mut c_void) -> Result<(), MemoryError> {
     let manager = MEMORY_MANAGER.get().unwrap();
     let mut manager = manager.lock().map_err(|_| MemoryError::LockError)?;
     manager.d_free(ptr)
+}
+
+/// Explicitly shutdown the HIP memory manager and release all GPU resources.
+///
+/// Call this from `main()` before process exit for clean teardown.
+/// This properly releases VPMM resources before HIP's buggy internal cleanup
+/// runs, avoiding SIGSEGV crashes on process exit.
+///
+/// # Idempotency
+/// Safe to call multiple times - subsequent calls are no-ops.
+///
+/// # Usage
+///
+/// For production binaries that want clean shutdown:
+/// ```ignore
+/// fn main() {
+///     // ... your code ...
+///
+///     openvm_hip_common::hip_runtime_shutdown();
+/// }
+/// ```
+///
+/// For tests, you can alternatively use `HIP_FORCE_EXIT=1` environment variable
+/// which terminates the process immediately after tests complete, skipping
+/// HIP's buggy cleanup entirely.
+pub fn hip_runtime_shutdown() {
+    if is_shutting_down() {
+        // Already in shutdown - avoid re-entering
+        return;
+    }
+
+    if let Some(mm) = MEMORY_MANAGER.get() {
+        if let Ok(mut guard) = mm.lock() {
+            guard.shutdown();
+        } else {
+            tracing::warn!("hip_runtime_shutdown: failed to acquire lock");
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
