@@ -40,13 +40,30 @@ pub fn is_shutting_down() -> bool {
 /// atexit handler that calls _exit(0) to skip remaining atexit handlers.
 /// This prevents HIP runtime's buggy cleanup from running and causing SIGSEGV.
 ///
-/// Behavior controlled by environment variables:
-/// - HIP_FORCE_EXIT=1: Enable force exit (recommended for test suites)
-/// - Default (no env var): Normal exit (may crash with SIGSEGV on some systems)
+/// # For Testing Only
 ///
-/// The force exit is OFF by default because calling _exit() skips Rust destructors
-/// and can mask test failures. Enable it when running many HIP tests that would
-/// otherwise crash during cleanup due to HIP/ROCm runtime bugs.
+/// This escape hatch exists because HIP/ROCm has a bug where its internal atexit
+/// cleanup crashes (SIGSEGV) when cleaning up VPMM allocations. The crash happens
+/// *inside HIP's code*, not ours, so we can't fix it directly.
+///
+/// **Production binaries** should call [`hip_runtime_shutdown()`] explicitly
+/// before exit instead of relying on this mechanism.
+///
+/// # Environment Variable
+///
+/// - `HIP_FORCE_EXIT=1`: Enable force exit (required for openvm-hip-backend tests)
+/// - Default (no env var): Normal exit, `#[ctor::dtor]` cleanup runs
+///
+/// The force exit is **OFF by default** because calling `_exit()` skips Rust
+/// destructors, can mask test failures, and bypasses normal cleanup. Only enable
+/// it when running HIP tests that would otherwise crash during cleanup.
+///
+/// # Example
+///
+/// ```bash
+/// # Run hip-backend tests without SIGSEGV on exit
+/// HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo test -p openvm-hip-backend
+/// ```
 extern "C" fn force_exit() {
     // Only force exit if explicitly requested via environment variable
     let force_exit_enabled = std::env::var("HIP_FORCE_EXIT")
@@ -62,7 +79,7 @@ extern "C" fn force_exit() {
             libc::_exit(0);
         }
     }
-    // Otherwise, let normal exit proceed (may crash with SIGSEGV on some systems)
+    // Otherwise, let normal exit proceed (dtor cleanup will run)
 }
 
 /// atexit handler to set the shutdown flag.
@@ -74,7 +91,6 @@ extern "C" fn shutdown_flag_setter() {
 #[ctor::ctor]
 fn init() {
     // Register shutdown_flag_setter FIRST (runs LAST due to LIFO order).
-    // This is only reached if HIP_NO_FORCE_EXIT is set and force_exit doesn't terminate.
     unsafe {
         libc::atexit(shutdown_flag_setter);
     }
@@ -87,7 +103,7 @@ fn init() {
     tracing::info!("Memory manager initialized (leak-on-exit pattern)");
 
     // Register force_exit LAST (runs FIRST due to LIFO order).
-    // It immediately exits the process, preventing HIP's buggy cleanup from running.
+    // Only takes effect if HIP_FORCE_EXIT=1 is set - see force_exit() docs.
     unsafe {
         libc::atexit(force_exit);
     }

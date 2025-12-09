@@ -35,17 +35,47 @@
 //!
 //! ## Running Tests
 //!
-//! Due to a bug in the HIP/ROCm runtime's cleanup handlers, running many tests
-//! without the `HIP_FORCE_EXIT=1` environment variable may cause a SIGSEGV after
-//! tests complete (during process teardown). To run tests cleanly:
+//! **Required environment variables:**
 //!
 //! ```bash
-//! HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo test --package openvm-hip-backend
+//! HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo test -p openvm-hip-backend
 //! ```
 //!
-//! The `HIP_FORCE_EXIT=1` flag tells the HIP backend to call `_exit(0)` before
-//! the buggy HIP runtime cleanup handlers can run. This is safe for tests but
-//! should not be used in production (where you want normal process teardown).
+//! - `HIP_ARCH`: Set to your GPU architecture (e.g., `gfx1151` for Strix Halo,
+//!   `gfx1100` for RDNA3, `gfx90a` for MI200)
+//! - `HIP_FORCE_EXIT=1`: **Required** to avoid SIGSEGV on exit (see below)
+//!
+//! ## Known Issue: SIGSEGV on Exit
+//!
+//! Without `HIP_FORCE_EXIT=1`, tests will pass but the process crashes with
+//! SIGSEGV during cleanup:
+//!
+//! ```text
+//! test result: ok. 40 passed; 0 failed
+//! error: process didn't exit successfully (signal: 11, SIGSEGV)
+//! ```
+//!
+//! This is caused by a bug in HIP/ROCm's internal atexit handlers that crash
+//! when cleaning up VPMM (Virtual Memory Pool) allocations. The crash happens
+//! *inside HIP's code*, not ours. Setting `HIP_FORCE_EXIT=1` calls `_exit(0)`
+//! before HIP's buggy cleanup runs.
+//!
+//! # Production Usage
+//!
+//! For production binaries, do **not** use `HIP_FORCE_EXIT`. Instead, call
+//! [`openvm_hip_common::hip_runtime_shutdown()`] explicitly before exit:
+//!
+//! ```ignore
+//! fn main() {
+//!     // ... your proving code ...
+//!
+//!     // Clean shutdown before exit
+//!     openvm_hip_common::hip_runtime_shutdown();
+//! }
+//! ```
+//!
+//! This properly releases VPMM resources before HIP's cleanup runs, avoiding
+//! the crash without the nuclear option of `_exit(0)`.
 
 // Ensure CUDA and ROCm backends are not enabled simultaneously.
 // This would cause link-time conflicts between cudart and amdhip64.
