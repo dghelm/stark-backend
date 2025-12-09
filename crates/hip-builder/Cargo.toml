@@ -1,0 +1,10 @@
+[package]
+name = "openvm-hip-builder"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "A build utility for HIP/ROCm projects"
+
+[dependencies]
+cc = { workspace = true, default-features = false, features = ["parallel"] }
+glob.workspace = true

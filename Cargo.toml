@@ -8,7 +8,7 @@ repository = "https://github.com/openvm-org/"
 license = "MIT OR Apache-2.0"
 
 [workspace]
-members = ["crates/stark-backend", "crates/stark-sdk", "crates/cuda-common", "crates/cuda-backend", "crates/cuda-builder"]
+members = ["crates/stark-backend", "crates/stark-sdk", "crates/cuda-common", "crates/cuda-backend", "crates/cuda-builder", "crates/hip-builder"]
 # Only these build by default
 default-members = ["crates/stark-backend", "crates/stark-sdk"]
 resolver = "2"
@@ -55,6 +55,7 @@ openvm-stark-sdk = { path = "crates/stark-sdk", default-features = false }
 openvm-cuda-builder = { path = "crates/cuda-builder", default-features = false }
 openvm-cuda-common = { path = "crates/cuda-common", default-features = false }
 openvm-cuda-backend = { path = "crates/cuda-backend", default-features = false }
+openvm-hip-builder = { path = "crates/hip-builder", default-features = false }
 
 # Plonky3
 p3-air = { git = "https://github.com/Plonky3/Plonky3.git", rev = "539bbc84085efb609f4f62cb03cf49588388abdb", default-features = false }
