@@ -171,7 +171,11 @@ impl HipBuilder {
         // Create cc::Build - use compiler("hipcc") instead of .cuda(true)
         // to avoid NVCC-specific flag injection
         let mut builder = cc::Build::new();
-        builder.compiler("hipcc");
+        let hipcc_path = find_hipcc().expect(
+            "hipcc not found. Make sure ROCm is installed and either hipcc is in PATH, \
+             or set HIP_PATH/ROCM_PATH environment variable."
+        );
+        builder.compiler(&hipcc_path);
 
         // Handle HIP_DEBUG=1
         self.handle_debug_shortcuts(&mut builder);
@@ -318,27 +322,137 @@ impl HipBuilder {
     }
 }
 
-/// Check if HIP is available on the system
+/// Check if HIP is available on the system.
+/// Checks for hipcc in PATH, then standard ROCm locations.
 pub fn hip_available() -> bool {
-    Command::new("hipcc").arg("--version").output().is_ok()
+    // First check if hipcc is in PATH
+    if Command::new("hipcc").arg("--version").output().is_ok() {
+        return true;
+    }
+
+    // Check standard ROCm locations
+    let standard_paths = [
+        "/opt/rocm/bin/hipcc",
+        "/usr/local/rocm/bin/hipcc",
+    ];
+
+    for path in &standard_paths {
+        if std::path::Path::new(path).exists() {
+            return true;
+        }
+    }
+
+    // Check HIP_PATH and ROCM_PATH environment variables
+    if let Ok(hip_path) = env::var("HIP_PATH") {
+        let hipcc = format!("{}/bin/hipcc", hip_path);
+        if std::path::Path::new(&hipcc).exists() {
+            return true;
+        }
+    }
+
+    if let Ok(rocm_path) = env::var("ROCM_PATH") {
+        let hipcc = format!("{}/bin/hipcc", rocm_path);
+        if std::path::Path::new(&hipcc).exists() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Get the path to hipcc, checking PATH first then standard locations.
+pub fn find_hipcc() -> Option<String> {
+    // First check if hipcc is in PATH
+    if Command::new("hipcc").arg("--version").output().is_ok() {
+        return Some("hipcc".to_string());
+    }
+
+    // Check HIP_PATH and ROCM_PATH environment variables first
+    if let Ok(hip_path) = env::var("HIP_PATH") {
+        let hipcc = format!("{}/bin/hipcc", hip_path);
+        if std::path::Path::new(&hipcc).exists() {
+            return Some(hipcc);
+        }
+    }
+
+    if let Ok(rocm_path) = env::var("ROCM_PATH") {
+        let hipcc = format!("{}/bin/hipcc", rocm_path);
+        if std::path::Path::new(&hipcc).exists() {
+            return Some(hipcc);
+        }
+    }
+
+    // Check standard ROCm locations
+    let standard_paths = [
+        "/opt/rocm/bin/hipcc",
+        "/usr/local/rocm/bin/hipcc",
+    ];
+
+    for path in &standard_paths {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    None
+}
+
+/// Find hipconfig binary path
+fn find_hipconfig() -> Option<String> {
+    // Check if hipconfig is in PATH
+    if Command::new("hipconfig").arg("--version").output().is_ok() {
+        return Some("hipconfig".to_string());
+    }
+
+    // Check standard ROCm locations
+    let standard_paths = [
+        "/opt/rocm/bin/hipconfig",
+        "/usr/local/rocm/bin/hipconfig",
+    ];
+
+    for path in &standard_paths {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    // Check HIP_PATH and ROCM_PATH
+    if let Ok(hip_path) = env::var("HIP_PATH") {
+        let hipconfig = format!("{}/bin/hipconfig", hip_path);
+        if std::path::Path::new(&hipconfig).exists() {
+            return Some(hipconfig);
+        }
+    }
+
+    if let Ok(rocm_path) = env::var("ROCM_PATH") {
+        let hipconfig = format!("{}/bin/hipconfig", rocm_path);
+        if std::path::Path::new(&hipconfig).exists() {
+            return Some(hipconfig);
+        }
+    }
+
+    None
 }
 
 /// Detect HIP architecture using hipconfig (preferred) or rocminfo (fallback)
 pub fn detect_hip_arch() -> String {
     // Try hipconfig --amdgpu-target first (simple, maintained)
-    if let Ok(output) = Command::new("hipconfig")
-        .arg("--amdgpu-target")
-        .output()
-    {
-        if output.status.success() {
-            let arch = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
-            if !arch.is_empty() && arch.starts_with("gfx") {
-                // Set both cargo env and process env
-                println!("cargo:rustc-env=HIP_ARCH={}", arch);
-                env::set_var("HIP_ARCH", &arch);
-                return arch;
+    let hipconfig = find_hipconfig();
+    if let Some(hipconfig_path) = hipconfig {
+        if let Ok(output) = Command::new(&hipconfig_path)
+            .arg("--amdgpu-target")
+            .output()
+        {
+            if output.status.success() {
+                let arch = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .to_string();
+                if !arch.is_empty() && arch.starts_with("gfx") {
+                    // Set both cargo env and process env
+                    println!("cargo:rustc-env=HIP_ARCH={}", arch);
+                    env::set_var("HIP_ARCH", &arch);
+                    return arch;
+                }
             }
         }
     }
