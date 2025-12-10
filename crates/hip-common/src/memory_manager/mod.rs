@@ -13,8 +13,97 @@ use crate::{
     stream::{current_stream_id, hipStreamPerThread},
 };
 
+/// Simple free-list pool for reusing allocations when VPMM is disabled.
+/// This avoids the ~7ms overhead of hipMallocAsync on consumer AMD GPUs.
+///
+/// Buffers are bucketed by size class (power of 2), and we keep up to
+/// MAX_CACHED_PER_SIZE buffers per size class.
+mod simple_pool {
+    use std::{collections::HashMap, ffi::c_void, ptr::NonNull};
+
+    /// Maximum buffers to cache per size class
+    const MAX_CACHED_PER_SIZE: usize = 4;
+
+    /// Minimum allocation size (smaller allocations are rounded up)
+    const MIN_ALLOC_SIZE: usize = 256;
+
+    pub struct SimplePool {
+        /// Map from size class (power of 2) to list of free buffers
+        free_lists: HashMap<usize, Vec<NonNull<c_void>>>,
+        /// Total bytes currently in the pool
+        pool_bytes: usize,
+    }
+
+    impl SimplePool {
+        pub fn new() -> Self {
+            Self {
+                free_lists: HashMap::new(),
+                pool_bytes: 0,
+            }
+        }
+
+        /// Round size up to the nearest power of 2 (with minimum)
+        fn size_class(size: usize) -> usize {
+            let size = size.max(MIN_ALLOC_SIZE);
+            size.next_power_of_two()
+        }
+
+        /// Try to get a buffer from the pool that's >= requested size
+        /// Returns (pointer, actual_size) if found
+        pub fn try_get(&mut self, size: usize) -> Option<(NonNull<c_void>, usize)> {
+            let size_class = Self::size_class(size);
+
+            if let Some(list) = self.free_lists.get_mut(&size_class) {
+                if let Some(ptr) = list.pop() {
+                    self.pool_bytes -= size_class;
+                    return Some((ptr, size_class));
+                }
+            }
+            None
+        }
+
+        /// Return a buffer to the pool
+        /// Returns false if the pool is full for this size class (caller should free)
+        pub fn try_put(&mut self, ptr: NonNull<c_void>, size: usize) -> bool {
+            let size_class = Self::size_class(size);
+
+            let list = self.free_lists.entry(size_class).or_default();
+            if list.len() >= MAX_CACHED_PER_SIZE {
+                return false; // Pool full, caller should free
+            }
+
+            list.push(ptr);
+            self.pool_bytes += size_class;
+            true
+        }
+
+        /// Get all buffers for shutdown cleanup
+        pub fn drain_all(&mut self) -> Vec<NonNull<c_void>> {
+            let mut all = Vec::new();
+            for (_, list) in self.free_lists.drain() {
+                all.extend(list);
+            }
+            self.pool_bytes = 0;
+            all
+        }
+
+        /// Current pool size in bytes
+        #[allow(dead_code)]
+        pub fn pool_bytes(&self) -> usize {
+            self.pool_bytes
+        }
+    }
+
+    impl Default for SimplePool {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
+
 mod hip;
 mod vm_pool;
+use simple_pool::SimplePool;
 use vm_pool::VirtualMemoryPool;
 
 #[cfg(test)]
@@ -141,6 +230,8 @@ fn early_shutdown() {
 
 pub struct MemoryManager {
     pool: VirtualMemoryPool,
+    /// Simple free-list pool for reusing small allocations (when VPMM disabled)
+    simple_pool: SimplePool,
     allocated_ptrs: HashMap<NonNull<c_void>, usize>,
     current_size: usize,
     max_used_size: usize,
@@ -160,6 +251,7 @@ impl MemoryManager {
 
         Self {
             pool,
+            simple_pool: SimplePool::new(),
             allocated_ptrs: HashMap::new(),
             current_size: 0,
             max_used_size: 0,
@@ -199,6 +291,18 @@ impl MemoryManager {
             }
         }
 
+        // Drain and free the simple pool
+        for ptr in self.simple_pool.drain_all() {
+            let result = unsafe { hipFreeAsync(ptr.as_ptr(), hipStreamPerThread) };
+            if result != 0 {
+                tracing::warn!(
+                    "hipFreeAsync (pool) failed during shutdown: ptr={:p}, error={}",
+                    ptr.as_ptr(),
+                    result
+                );
+            }
+        }
+
         // Shutdown the VM pool
         self.pool.shutdown();
 
@@ -210,16 +314,31 @@ impl MemoryManager {
 
         let mut tracked_size = size;
         let ptr = if size < self.pool.page_size {
-            let mut ptr: *mut c_void = std::ptr::null_mut();
-            check(unsafe { hipMallocAsync(&mut ptr, size, hipStreamPerThread) }).map_err(|e| {
-                tracing::error!("hipMallocAsync failed: size={}: {:?}", size, e);
-                MemoryError::from(e)
-            })?;
-            self.allocated_ptrs.insert(
-                NonNull::new(ptr).expect("BUG: hipMallocAsync returned null"),
-                size,
-            );
-            ptr
+            // When VPMM is disabled (page_size = usize::MAX), all allocations come here.
+            // First, try to get a buffer from the simple pool (avoids ~7ms hipMallocAsync)
+            if let Some((pooled_ptr, pooled_size)) = self.simple_pool.try_get(size) {
+                // pooled_size is the size class (power of 2), which is >= size
+                tracked_size = pooled_size;
+                self.allocated_ptrs.insert(pooled_ptr, pooled_size);
+                pooled_ptr.as_ptr()
+            } else {
+                // No pooled buffer available, allocate fresh
+                // Round up to size class for consistency with pool reuse
+                let alloc_size = size.max(256).next_power_of_two();
+                let mut ptr: *mut c_void = std::ptr::null_mut();
+                check(unsafe { hipMallocAsync(&mut ptr, alloc_size, hipStreamPerThread) }).map_err(
+                    |e| {
+                        tracing::error!("hipMallocAsync failed: size={}: {:?}", alloc_size, e);
+                        MemoryError::from(e)
+                    },
+                )?;
+                tracked_size = alloc_size;
+                self.allocated_ptrs.insert(
+                    NonNull::new(ptr).expect("BUG: hipMallocAsync returned null"),
+                    alloc_size,
+                );
+                ptr
+            }
         } else {
             tracked_size = size.next_multiple_of(self.pool.page_size);
             let stream_id = current_stream_id()?;
@@ -241,10 +360,14 @@ impl MemoryManager {
 
         if let Some(size) = self.allocated_ptrs.remove(&nn) {
             self.current_size -= size;
-            check(unsafe { hipFreeAsync(ptr, hipStreamPerThread) }).map_err(|e| {
-                tracing::error!("hipFreeAsync failed: ptr={:p}: {:?}", ptr, e);
-                MemoryError::from(e)
-            })?;
+            // Try to return to the simple pool for reuse (avoids ~7ms hipMallocAsync next time)
+            if !self.simple_pool.try_put(nn, size) {
+                // Pool is full for this size class, actually free
+                check(unsafe { hipFreeAsync(ptr, hipStreamPerThread) }).map_err(|e| {
+                    tracing::error!("hipFreeAsync failed: ptr={:p}: {:?}", ptr, e);
+                    MemoryError::from(e)
+                })?;
+            }
         } else {
             let stream_id = current_stream_id()?;
             let freed_size = self.pool.free_internal(ptr, stream_id)?;
