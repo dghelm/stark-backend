@@ -54,3 +54,6 @@ pub mod stream;
 
 // Re-export hip_runtime_shutdown for convenient access
 pub use memory_manager::hip_runtime_shutdown;
+
+// Re-export hipStream_t for FFI bindings
+pub use cubecl_hip_sys::hipStream_t;
