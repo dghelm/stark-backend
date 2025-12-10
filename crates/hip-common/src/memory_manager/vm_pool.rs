@@ -48,10 +48,28 @@ impl Default for VpmmConfig {
 
 impl VpmmConfig {
     /// Load configuration from environment variables:
+    /// - `HIP_DISABLE_VPMM`: Set to "1" to disable VMM entirely and use hipMalloc/hipFree
+    ///   (recommended for consumer AMD GPUs like RX 7000/9000 series where VMM is slow)
     /// - `VPMM_PAGE_SIZE`: Page size in bytes (must be multiple of HIP granularity)
     /// - `VPMM_VA_SIZE`: Virtual address space size per chunk (default: 8 TB)
     /// - `VPMM_PAGES`: Number of pages to preallocate (default: 0)
     pub fn from_env() -> Self {
+        // Check if VPMM should be disabled entirely
+        let vpmm_disabled = std::env::var("HIP_DISABLE_VPMM")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
+        if vpmm_disabled {
+            tracing::info!(
+                "VPMM disabled via HIP_DISABLE_VPMM=1, using hipMalloc/hipFree for all allocations"
+            );
+            return Self {
+                page_size: Some(usize::MAX), // This signals to use hipMalloc for everything
+                va_size: 0,
+                initial_pages: 0,
+            };
+        }
+
         let page_size = std::env::var("VPMM_PAGE_SIZE").ok().map(|val| {
             let size: usize = val.parse().expect("VPMM_PAGE_SIZE must be a valid number");
             assert!(size > 0, "VPMM_PAGE_SIZE must be > 0");
@@ -134,6 +152,23 @@ unsafe impl Sync for VirtualMemoryPool {}
 impl VirtualMemoryPool {
     pub(super) fn new(config: VpmmConfig) -> Self {
         let device_id = set_device().unwrap();
+
+        // Check if VPMM is explicitly disabled via config (from HIP_DISABLE_VPMM=1)
+        if config.page_size == Some(usize::MAX) {
+            tracing::info!("VPMM disabled, all allocations will use hipMalloc/hipFree");
+            return Self {
+                roots: vec![],
+                active_pages: HashMap::new(),
+                free_regions: BTreeMap::new(),
+                malloc_regions: HashMap::new(),
+                unmapped_regions: BTreeMap::new(),
+                free_num: 0,
+                page_size: usize::MAX,
+                va_size: 0,
+                device_id,
+                shutdown_done: false,
+            };
+        }
 
         // Check VPMM support and resolve page_size
         let (root, page_size, va_size) = unsafe {

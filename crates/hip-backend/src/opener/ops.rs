@@ -269,5 +269,5 @@ pub(crate) fn matrix_evaluate(
         .unwrap();
     }
 
-    Ok(output.to_host().unwrap())
+    Ok(output.to_host_fast().unwrap())
 }

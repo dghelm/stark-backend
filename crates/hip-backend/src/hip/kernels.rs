@@ -203,6 +203,21 @@ pub mod poseidon2 {
         ))
     }
 
+    /// Raw pointer version for optimized packed buffer usage.
+    /// Allows passing pre-computed pointers into a packed device buffer.
+    pub unsafe fn poseidon2_rows_p3_multi_raw(
+        out: *mut std::ffi::c_void,
+        ptrs: *const u64,
+        cols: *const u64,
+        rows: *const u64,
+        row_size: u64,
+        matrix_num: u64,
+    ) -> Result<(), HipError> {
+        HipError::from_result_i32(_poseidon2_rows_p3_multi(
+            out, ptrs, cols, rows, row_size, matrix_num,
+        ))
+    }
+
     pub unsafe fn poseidon2_compress<T>(
         output: &DeviceBuffer<T>,
         input: &DeviceBuffer<T>,

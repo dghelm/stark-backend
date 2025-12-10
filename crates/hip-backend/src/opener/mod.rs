@@ -368,7 +368,7 @@ fn commit_phase_on_gpu(
         folded = fri_fold(folded, fri_input, beta, g_inv).unwrap();
     }
 
-    let mut folded_on_host: Vec<EF> = folded.coeff.to_host().unwrap();
+    let mut folded_on_host: Vec<EF> = folded.coeff.to_host_fast().unwrap();
     folded_on_host.truncate(final_poly_len);
 
     // TODO: For better performance, we could run the IDFT on only the first half

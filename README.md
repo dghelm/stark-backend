@@ -16,8 +16,21 @@ The backend is designed to be modular and compatible with different proof system
 - [`openvm-cuda-builder`](crates/cuda-builder): Build utilities and CUDA detection crate, meant to be imported as a build dependency in crates that use CUDA.
 - [`openvm-cuda-common`](crates/cuda-common): Shared headers (`.cuh/.h` files) and CUDA utilities library.
 - [`openvm-cuda-backend`](crates/cuda-backend): CUDA implementation of a STARK prover backend using all of the previous crates.
+- [`openvm-hip-builder`](crates/hip-builder): Build utilities and HIP/ROCm detection crate for AMD GPUs.
+- [`openvm-hip-common`](crates/hip-common): Shared utilities and HIP memory management library.
+- [`openvm-hip-backend`](crates/hip-backend): HIP/ROCm implementation of a STARK prover backend for AMD GPUs.
 
 Contributors should read [Development without CUDA](./docs/README.md#development-without-cuda) and [Development with CUDA](./docs/README.md#development-with-cuda) for instructions on how to set up their development environments.
+
+## HIP/ROCm Backend (AMD GPUs)
+
+The HIP backend supports AMD GPUs (RDNA3, RDNA3.5, CDNA). For best performance on **consumer AMD GPUs** (RX 7000/9000 series), set the `HIP_DISABLE_VPMM=1` environment variable:
+
+```bash
+HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 HIP_DISABLE_VPMM=1 ./your_hip_binary
+```
+
+This disables the Virtual Memory Management allocator which has high overhead on consumer GPUs. See [HIP Backend Benchmarks](crates/hip-backend/benches/README.md) for details.
 
 ## Status
 

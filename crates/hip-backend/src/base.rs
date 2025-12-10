@@ -94,6 +94,10 @@ impl<T> MemCopyD2H<T> for DeviceMatrix<T> {
     fn to_host(&self) -> Result<Vec<T>, MemCopyError> {
         self.buffer.to_host()
     }
+
+    fn to_host_fast(&self) -> Result<Vec<T>, MemCopyError> {
+        self.buffer.to_host_fast()
+    }
 }
 
 impl<T: Debug> Debug for DeviceMatrix<T> {

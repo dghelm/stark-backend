@@ -292,7 +292,7 @@ impl FriLogUpPhaseGpu {
         drop(partitioned_main);
 
         // 4. output data
-        let h_sum = d_sum.to_host().unwrap()[0];
+        let h_sum = d_sum.to_host_fast().unwrap()[0];
         (d_permutation, h_sum)
     }
 

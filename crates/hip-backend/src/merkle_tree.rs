@@ -11,13 +11,18 @@ use openvm_hip_common::{
     d_buffer::DeviceBuffer,
     error::HipError,
 };
+// Use to_host_fast() for better performance (stream sync vs event sync)
 use openvm_stark_backend::prover::hal::MatrixDimensions;
 use p3_symmetric::Hash;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::debug_span;
 
 use crate::{
-    base::DeviceMatrix, hip::kernels::poseidon2::*, hip_device::HipDevice, lde::GpuLde, prelude::F,
+    base::DeviceMatrix,
+    hip::kernels::poseidon2::{poseidon2_compress, poseidon2_rows_p3_multi_raw, query_digest_layers_kernel},
+    hip_device::HipDevice,
+    lde::GpuLde,
+    prelude::F,
 };
 
 const DIGEST_WIDTH: usize = 8;
@@ -86,25 +91,38 @@ impl<LDE: GpuLde> GpuMerkleTree<LDE> {
         // matrices_ptr - array of pointers to matrices
         // matrices_col - array of column sizes
         // matrices_row - array of row sizes
-        let matrices_ptr: Vec<u64> = matrices
-            .iter()
-            .map(|m| m.buffer().as_ptr() as u64)
-            .collect();
-        let matrices_col: Vec<u64> = matrices.iter().map(|m| m.width() as u64).collect();
-        let matrices_row: Vec<u64> = matrices.iter().map(|m| m.height() as u64).collect();
+        //
+        // Optimization: Pack all three arrays into a single H2D transfer
+        // Layout: [ptrs...][cols...][rows...]
+        let n = matrices.len();
+        let mut packed_metadata: Vec<u64> = Vec::with_capacity(3 * n);
 
-        let d_matrices_ptr = matrices_ptr.to_device().unwrap();
-        let d_matrices_col = matrices_col.to_device().unwrap();
-        let d_matrices_row = matrices_row.to_device().unwrap();
+        // Pack: ptrs
+        packed_metadata.extend(matrices.iter().map(|m| m.buffer().as_ptr() as u64));
+        // Pack: cols
+        packed_metadata.extend(matrices.iter().map(|m| m.width() as u64));
+        // Pack: rows
+        packed_metadata.extend(matrices.iter().map(|m| m.height() as u64));
+
+        let row_size = packed_metadata[2 * n]; // First row value (rows start at offset 2*n)
+
+        // Single H2D copy for all metadata
+        let d_packed = packed_metadata.to_device().unwrap();
+
+        // Create views into the packed buffer by computing pointer offsets
+        // SAFETY: d_packed contains [ptrs, cols, rows] contiguously, each section has n elements
+        let d_ptrs_ptr = d_packed.as_ptr();
+        let d_cols_ptr = unsafe { d_ptrs_ptr.add(n) };
+        let d_rows_ptr = unsafe { d_cols_ptr.add(n) };
 
         unsafe {
-            poseidon2_rows_p3_multi(
-                out,
-                &d_matrices_ptr,
-                &d_matrices_col,
-                &d_matrices_row,
-                matrices_row[0],
-                matrices.len() as u64,
+            poseidon2_rows_p3_multi_raw(
+                out.as_mut_raw_ptr(),
+                d_ptrs_ptr,
+                d_cols_ptr,
+                d_rows_ptr,
+                row_size,
+                n as u64,
             )
         }
     }
@@ -120,7 +138,7 @@ impl<LDE: GpuLde> GpuMerkleTree<LDE> {
     pub fn root(&self) -> Hash<F, F, DIGEST_WIDTH> {
         let root = self.digest_layers.last().unwrap();
         assert_eq!(root.len(), 1, "Only one root is supported");
-        root.to_host().unwrap()[0].into()
+        root.to_host_fast().unwrap()[0].into()
     }
 
     #[allow(clippy::type_complexity)]
@@ -157,7 +175,7 @@ impl<LDE: GpuLde> GpuMerkleTree<LDE> {
                         .collect_vec();
 
                     let unique_openings_vec =
-                        matrix.get_lde_rows(&unique_indices).to_host().unwrap();
+                        matrix.get_lde_rows(&unique_indices).to_host_fast().unwrap();
                     let unique_openings_rows =
                         unique_openings_vec.chunks(matrix.width()).collect_vec();
 
@@ -251,7 +269,7 @@ impl<LDE: GpuLde> GpuMerkleTree<LDE> {
             )
             .unwrap();
         }
-        digest_buffer.to_host().unwrap()
+        digest_buffer.to_host_fast().unwrap()
     }
 
     pub fn get_max_height(&self) -> usize {

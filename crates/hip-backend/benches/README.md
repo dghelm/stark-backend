@@ -2,32 +2,54 @@
 
 This directory contains micro-benchmarks for investigating GPU performance bottlenecks in the HIP backend.
 
+## Quick Start - Critical Performance Fix
+
+**For consumer AMD GPUs (RX 7000/9000 series), always set `HIP_DISABLE_VPMM=1`:**
+
+```bash
+HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 HIP_DISABLE_VPMM=1 ./your_hip_binary
+```
+
+This bypasses the slow Virtual Memory Management (VMM) allocator and provides **217x speedup** on consumer GPUs.
+
+| log_height=20 | VPMM Enabled | VPMM Disabled | Improvement |
+|---------------|--------------|---------------|-------------|
+| HIP Time | 50.46s | 231.84ms | **217x faster** |
+| vs CPU | 0.12x (8x slower) | **27.1x faster** | |
+
 ## Background
 
-The HIP backend shows **severe performance degradation** at larger input sizes:
+The HIP backend showed **severe performance degradation** at larger input sizes with VPMM enabled:
 
-| log_height | Input Size | CPU Time | HIP Time | Speedup |
-|------------|-----------|----------|----------|---------|
-| 16 | 6 MB | 388ms | 350ms | **1.1x** ✓ |
-| 18 | 24 MB | 1.56s | 3.31s | **0.47x** ✗ |
-| 20 | 96 MB | 7.82s | 51.28s | **0.15x** ✗ |
+| log_height | Input Size | CPU Time | HIP Time (VPMM) | HIP Time (no VPMM) | Speedup |
+|------------|-----------|----------|-----------------|-------------------|---------|
+| 16 | 6 MB | 390ms | 401ms | 188ms | **2.1x** ✓ |
+| 20 | 96 MB | 6.3s | 50.5s | 232ms | **27x** ✓ |
 
-At log_height=20, HIP is **6.5x slower than CPU**. These benchmarks help identify and quantify the bottlenecks.
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HIP_DISABLE_VPMM=1` | **CRITICAL:** Disable VMM allocator. Use on consumer GPUs. | off |
+| `HIP_FORCE_EXIT=1` | Force exit to avoid SIGSEGV on cleanup | off |
+| `HIP_ARCH=gfxXXXX` | Target GPU architecture | auto-detect |
+| `VPMM_PAGE_SIZE` | VMM page size (if VPMM enabled) | device default |
+| `VPMM_PAGES` | Pre-allocate N pages at startup | 0 |
 
 ## Running Benchmarks
 
 ```bash
-# Run all benchmarks
-HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo bench -p openvm-hip-backend
+# Run all benchmarks (with VPMM disabled for accurate results)
+HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 HIP_DISABLE_VPMM=1 cargo bench -p openvm-hip-backend
 
 # Run specific benchmark
-HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo bench -p openvm-hip-backend --bench sync_overhead
+HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 HIP_DISABLE_VPMM=1 cargo bench -p openvm-hip-backend --bench sync_overhead
 
 # Run with filter
-HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo bench -p openvm-hip-backend --bench lde -- "lde/steps"
+HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 HIP_DISABLE_VPMM=1 cargo bench -p openvm-hip-backend --bench lde -- "lde/steps"
 
 # Test mode (quick validation)
-HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 cargo bench -p openvm-hip-backend --bench sync_overhead -- --test
+HIP_FORCE_EXIT=1 HIP_ARCH=gfx1151 HIP_DISABLE_VPMM=1 cargo bench -p openvm-hip-backend --bench sync_overhead -- --test
 ```
 
 Replace `gfx1151` with your GPU architecture (e.g., `gfx1100` for RDNA3, `gfx90a` for MI200).
@@ -107,41 +129,44 @@ Measures the full LDE pipeline and individual steps.
 
 ## Identified Bottlenecks
 
-### 1. Implicit Stream Synchronization (40% of overhead) - HIGH
+### 1. VMM Allocator Overhead (99% of overhead) - CRITICAL [FIXED]
 
-**Location:** `hip-common/src/copy.rs:100-107`
+**Location:** `hip-common/src/memory_manager/vm_pool.rs`
 
-Every `to_host()` call blocks via `record_and_wait()`:
-```rust
-get_copy_event().lock().unwrap().record_and_wait(hipStreamPerThread)?;
-```
+The Virtual Memory Management (VMM) allocator uses `hipMemMap`, `hipMemCreate`, `hipMemUnmap`, `hipMemRelease` which are **extremely slow on consumer AMD GPUs**:
 
-### 2. Serial Kernel Execution (30% of overhead) - HIGH
+| API Call | Total Time | Calls | % of Runtime |
+|----------|------------|-------|--------------|
+| hipMemMap | 313ms | 6,207 | 29% |
+| hipMemUnmap | 290ms | 6,016 | 27% |
+| hipMemRelease | 152ms | 6,015 | 14% |
+| hipMemCreate | 146ms | 6,015 | 14% |
 
-**Location:** `hip-backend/src/lde/ops.rs:32-70`
+While kernel execution was only **8ms** (0.7%), memory management consumed **1,072ms** (99.3%)!
 
-LDE launches 5 kernels sequentially with no overlap opportunity.
+**Fix:** Set `HIP_DISABLE_VPMM=1` to use simple `hipMalloc`/`hipFree` instead.
 
-### 3. Excessive Metadata H2D Copies (20% of overhead) - MEDIUM
+### 2. Implicit Stream Synchronization - LOW (after VPMM fix)
 
-**Location:** `hip-backend/src/merkle_tree.rs:96-98`
+**Location:** `hip-common/src/copy.rs`
 
-Three separate H2D copies per `hash_matrices()` call.
+Every `to_host()` call blocks via `record_and_wait()`. Use `to_host_fast()` for better performance (stream sync vs event sync).
 
-### 4. Single Stream Architecture (10% of overhead) - MEDIUM
+### 3. Excessive Metadata H2D Copies - LOW (fixed)
 
-**Location:** `hip-common/src/stream.rs:68`
+**Location:** `hip-backend/src/merkle_tree.rs`
 
-All operations use `hipStreamPerThread`, preventing overlap.
+Three separate H2D copies per `hash_matrices()` call have been batched into a single transfer.
 
 ## Recommended Fixes
 
-| Fix | Impact | Complexity | Priority |
-|-----|--------|------------|----------|
-| Remove unnecessary D2H syncs | High | Low | P0 |
-| Batch metadata H2D copies | Medium | Low | P1 |
-| Multi-stream for overlap | High | High | P2 |
-| Kernel fusion | Medium | High | P3 |
+| Fix | Impact | Complexity | Status |
+|-----|--------|------------|--------|
+| Disable VPMM via `HIP_DISABLE_VPMM=1` | **217x** | Trivial | **DONE** |
+| Use `to_host_fast()` instead of `to_host()` | Low | Low | DONE |
+| Batch metadata H2D copies | Low | Low | DONE |
+| Multi-stream for overlap | Medium | High | TODO |
+| Kernel fusion | Medium | High | TODO |
 
 ## Output Location
 
