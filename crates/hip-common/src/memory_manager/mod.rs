@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytesize::ByteSize;
-use cubecl_hip_sys::{hipFreeAsync, hipMallocAsync};
+use cubecl_hip_sys::{hipFree, hipFreeAsync, hipMalloc, hipMallocAsync};
 
 use crate::{
     error::{check, MemoryError},
@@ -278,7 +278,7 @@ impl MemoryManager {
             self.allocated_ptrs.len()
         );
 
-        // Free small allocations (allocated via hipMallocAsync)
+        // Free small allocations (allocated via hipMalloc)
         for (ptr, _size) in self.allocated_ptrs.drain() {
             // Best effort - don't fail on errors during shutdown
             let result = unsafe { hipFreeAsync(ptr.as_ptr(), hipStreamPerThread) };
@@ -326,15 +326,15 @@ impl MemoryManager {
                 // Round up to size class for consistency with pool reuse
                 let alloc_size = size.max(256).next_power_of_two();
                 let mut ptr: *mut c_void = std::ptr::null_mut();
-                check(unsafe { hipMallocAsync(&mut ptr, alloc_size, hipStreamPerThread) }).map_err(
-                    |e| {
-                        tracing::error!("hipMallocAsync failed: size={}: {:?}", alloc_size, e);
-                        MemoryError::from(e)
-                    },
-                )?;
+                // Use hipMalloc (sync) instead of hipMallocAsync - may have less overhead
+                // on consumer AMD GPUs where async memory APIs are slow
+                check(unsafe { hipMalloc(&mut ptr, alloc_size) }).map_err(|e| {
+                    tracing::error!("hipMalloc failed: size={}: {:?}", alloc_size, e);
+                    MemoryError::from(e)
+                })?;
                 tracked_size = alloc_size;
                 self.allocated_ptrs.insert(
-                    NonNull::new(ptr).expect("BUG: hipMallocAsync returned null"),
+                    NonNull::new(ptr).expect("BUG: hipMalloc returned null"),
                     alloc_size,
                 );
                 ptr
